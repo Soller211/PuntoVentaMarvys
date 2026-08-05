@@ -41,7 +41,7 @@ html, body {
 }
 
 button { font-family: inherit; cursor: pointer; }
-input, select, textarea { font-family: inherit; font-size: 16px; }
+input, select, textarea { font-family: inherit; font-size: 16px; text-align: left; }
 
 /* El atributo hidden siempre debe ocultar, aunque haya display:flex/grid */
 [hidden] { display: none !important; }
@@ -103,7 +103,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 }
 .pos-search .search-ico {
   position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
-  font-size: 1rem; opacity: .6; pointer-events: none;
+  display: flex; opacity: .6; pointer-events: none;
 }
 .pos-search input {
   width: 100%;
@@ -206,7 +206,8 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   color: var(--text-muted);
   padding: 48px 24px;
 }
-.empty-state .emoji { font-size: 2.5rem; display: block; margin-bottom: 8px; }
+.empty-state .emoji { display: flex; justify-content: center; margin-bottom: 10px; color: var(--text-muted); opacity: .7; }
+.empty-state .emoji svg { width: 42px; height: 42px; }
 
 /* ---------- Botón flotante del carrito (solo teléfono) ---------- */
 .cart-fab {
@@ -258,13 +259,14 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   display: flex; align-items: center; justify-content: space-between;
   padding: 16px 18px; border-bottom: 1px solid var(--border);
 }
-.op-head h2 { margin: 0; font-size: 1.05rem; }
+.op-head h2 { margin: 0; font-size: 1.05rem; display: flex; align-items: center; gap: 8px; }
 .op-head .op-clear { border: none; background: none; color: var(--text-muted); font-size: .82rem; font-weight: 600; }
 .op-close { display: none; }
 .op-type { padding: 14px 18px 0; }
 .op-items { padding: 6px 18px; overflow-y: auto; flex: 1; }
 .op-empty { text-align: center; color: var(--text-muted); padding: 40px 20px; }
-.op-empty .emoji { font-size: 2.2rem; display: block; margin-bottom: 8px; }
+.op-empty .emoji { display: flex; justify-content: center; margin-bottom: 10px; opacity: .6; }
+.op-empty .emoji svg { width: 38px; height: 38px; }
 .op-foot { padding: 14px 18px calc(16px + var(--safe-b)); border-top: 1px solid var(--border); background: var(--surface-2); }
 
 /* ---------- Navegación inferior ---------- */
@@ -328,8 +330,13 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 }
 .pc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pc-items { font-size: .92rem; line-height: 1.4; }
-.pc-addr { font-size: .85rem; color: var(--text-muted); }
+.pc-addr { font-size: .85rem; color: var(--text-muted); display: flex; align-items: center; gap: 5px; }
 .pc-meta { display: flex; justify-content: space-between; font-size: .82rem; color: var(--text-muted); font-weight: 600; }
+.pc-meta span { display: inline-flex; align-items: center; gap: 4px; }
+
+/* Ícono pequeño incrustado en un texto corrido */
+.i-ico { display: inline-flex; vertical-align: -3px; margin-right: 3px; }
+.i-ico svg { display: block; }
 .pc-actions { display: flex; gap: 8px; align-items: center; margin-top: 2px; }
 .pc-actions .btn-block { flex: 1; }
 .status-pill {
@@ -361,7 +368,8 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .ob-progress { display: flex; gap: 8px; justify-content: center; margin-bottom: 18px; }
 .ob-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--border); transition: all .2s; }
 .ob-dot.on { background: var(--primary); width: 24px; }
-.ob-emoji { font-size: 3rem; line-height: 1; margin-bottom: 6px; }
+.ob-emoji { display: flex; justify-content: center; margin-bottom: 10px; color: var(--primary); }
+.ob-emoji svg { width: 46px; height: 46px; }
 .ob-card h1 { margin: 6px 0; font-size: 1.5rem; letter-spacing: -.02em; }
 .ob-card p { margin: 0 0 12px; color: var(--text-muted); }
 .ob-card .btn { margin-top: 10px; }
@@ -422,7 +430,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   width: 46px; height: 46px; flex: 0 0 46px;
   border-radius: 10px; background: var(--surface-2);
   background-size: cover; background-position: center;
-  display: grid; place-items: center; font-size: 1.2rem;
+  display: grid; place-items: center; color: var(--text-muted);
   border: 1px solid var(--border);
 }
 .menu-row .m-info { flex: 1; min-width: 0; }
@@ -432,12 +440,32 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .icon-btn {
   border: none;
   background: var(--surface-2);
+  color: var(--text-muted);
   border-radius: 8px;
   width: 38px; height: 38px;
   font-size: 1.1rem;
   display: grid;
   place-items: center;
 }
+.icon-btn svg { width: 19px; height: 19px; }
+
+/* Botón pequeño con ícono + texto (más claro que un ícono solo, sobre todo en pantallas táctiles) */
+.icon-btn-label {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: .82rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.icon-btn-label svg { width: 16px; height: 16px; flex: none; }
+
+/* Alinear los íconos SVG dentro de botones de texto normales */
+.btn svg { width: 16px; height: 16px; vertical-align: -3px; margin-right: 2px; }
 
 /* ---------- Historial ---------- */
 .hist-summary { margin-bottom: 20px; }
@@ -454,7 +482,8 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   padding: 14px;
   box-shadow: var(--shadow-sm);
 }
-.stat-card .s-label { font-size: .72rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.stat-card .s-label { font-size: .72rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; display: flex; align-items: center; gap: 5px; }
+.stat-card .s-label svg { width: 13px; height: 13px; flex: none; }
 .stat-card .s-value { font-size: 1.4rem; font-weight: 800; margin-top: 4px; letter-spacing: -.02em; }
 
 .chart-card {
@@ -465,7 +494,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   box-shadow: var(--shadow-sm);
   margin-bottom: 20px;
 }
-.chart-card h3 { margin: 0 0 14px; font-size: .95rem; }
+.chart-card h3 { margin: 0 0 14px; font-size: .95rem; display: flex; align-items: center; gap: 8px; }
 .bar-chart { display: flex; flex-direction: column; gap: 10px; }
 .bar-row { display: grid; grid-template-columns: 70px 1fr auto; align-items: center; gap: 10px; font-size: .85rem; }
 .bar-track { background: var(--surface-2); border-radius: 999px; height: 22px; overflow: hidden; }
@@ -492,13 +521,15 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .order-row .o-meta { font-size: .8rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .order-row .o-total { font-weight: 800; color: var(--text); }
 .tag {
-  display: inline-block; font-size: .68rem; font-weight: 700;
+  display: inline-flex; align-items: center; gap: 3px; font-size: .68rem; font-weight: 700;
   padding: 2px 8px; border-radius: 999px; vertical-align: middle;
 }
+.tag svg { width: 11px; height: 11px; flex: none; }
 .tag-domicilio { background: var(--primary-soft); color: var(--primary-dark); }
 .tag-llevar { background: #e0e7ff; color: #4338ca; }
 .tag-efectivo { background: var(--success-soft); color: var(--success); }
 .tag-transferencia { background: #dbeafe; color: var(--info); }
+.tag-discount { background: #fef3c7; color: #b45309; }
 
 /* ---------- Ajustes ---------- */
 .settings-form { display: flex; flex-direction: column; gap: 16px; max-width: 520px; }
@@ -526,7 +557,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   border: 1px dashed var(--border);
   background: var(--surface-2);
   background-size: cover; background-position: center;
-  display: grid; place-items: center; font-size: 1.6rem;
+  display: grid; place-items: center; color: var(--text-muted);
 }
 .img-actions { display: flex; flex-direction: column; gap: 8px; }
 .img-actions .btn { padding: 8px 14px; }
@@ -579,7 +610,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   display: flex; align-items: center; justify-content: space-between;
   z-index: 2;
 }
-.modal-head h2 { margin: 0; font-size: 1.1rem; }
+.modal-head h2 { margin: 0; font-size: 1.1rem; display: flex; align-items: center; gap: 8px; }
 .modal-close { border: none; background: var(--surface-2); border-radius: 999px; width: 34px; height: 34px; font-size: 1.1rem; }
 .modal-body { padding: 16px 18px; }
 .modal-foot { padding: 12px 18px; position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--border); display: flex; gap: 10px; }
@@ -607,6 +638,12 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 }
 .seg button.active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-dark); }
 
+/* Descuento: toggle % / monto fijo + campo */
+.discount-row { display: flex; gap: 8px; }
+.discount-row input { flex: 1; }
+.seg-mini { flex: 0 0 88px; }
+.seg-mini button { padding: 12px 4px; font-size: .9rem; }
+
 .change-box { background: var(--success-soft); color: var(--success); border-radius: var(--radius-sm); padding: 12px 14px; font-weight: 700; text-align: center; margin-top: 8px; }
 .change-box.neg { background: var(--primary-soft); color: var(--primary-dark); }
 
@@ -626,6 +663,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .ticket hr { border: none; border-top: 1px dashed #999; margin: 8px 0; }
 .ticket .t-row { display: flex; justify-content: space-between; }
 .ticket .t-total { font-weight: 700; font-size: 1.05rem; }
+.ticket .t-order-type { font-weight: 700; margin-top: 2px; }
 
 .toast {
   position: fixed;
@@ -683,6 +721,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 
 /* ---------- Impresión del ticket ---------- */
 @media print {
+  @page { margin: 8mm; }
   body * { visibility: hidden; }
   #printArea, #printArea * { visibility: visible; }
   #printArea { position: absolute; left: 0; top: 0; width: 100%; padding: 0; }

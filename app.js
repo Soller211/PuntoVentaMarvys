@@ -11,7 +11,9 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 
 const money = (n) => {
   const s = S.settings.currency || '$';
-  return s + (Math.round(n * 100) / 100).toLocaleString('es-MX', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  const rounded = Math.round(n * 100) / 100;
+  const decimals = Number.isInteger(rounded) ? 0 : 2;
+  return s + rounded.toLocaleString('es-MX', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 };
 const escapeHtml = (str = '') => String(str).replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
@@ -31,10 +33,10 @@ function minsAgo(ts) {
 
 /* ---------- Estados de entrega ---------- */
 const STATUS = {
-  preparacion: { label: 'En preparación', emoji: '👨‍🍳', color: '#d97706' },
-  camino: { label: 'En camino', emoji: '🛵', color: '#2563eb' },
-  listo: { label: 'Listo', emoji: '📦', color: '#0891b2' },
-  entregado: { label: 'Entregado', emoji: '🏁', color: '#16a34a' },
+  preparacion: { label: 'En preparación', icon: 'clock', color: '#d97706' },
+  camino: { label: 'En camino', icon: 'truck', color: '#2563eb' },
+  listo: { label: 'Listo', icon: 'box', color: '#0891b2' },
+  entregado: { label: 'Entregado', icon: 'checkCircle', color: '#16a34a' },
 };
 function statusFlow(type) {
   return type === 'domicilio'
@@ -101,12 +103,12 @@ if (S.settings.onboarded === undefined) {
 
 function saveProducts() {
   try { DB.set('mv_products', S.products); return true; }
-  catch (e) { toast('⚠️ Almacenamiento lleno. Usa imágenes más pequeñas o quita algunas.'); return false; }
+  catch (e) { toast('Almacenamiento lleno. Usa imágenes más pequeñas o quita algunas.'); return false; }
 }
 const saveOrders = () => DB.set('mv_orders', S.orders);
 function saveSettings() {
   try { DB.set('mv_settings', S.settings); return true; }
-  catch (e) { toast('⚠️ Almacenamiento lleno. Usa un logo/imágenes más pequeñas.'); return false; }
+  catch (e) { toast('Almacenamiento lleno. Usa un logo/imágenes más pequeñas.'); return false; }
 }
 
 /* ---------- Tema (color del negocio) ---------- */
@@ -137,7 +139,7 @@ function applyBranding() {
   const name = $('#brandName');
   if (name) name.textContent = S.settings.restaurantName || 'Punto de Venta';
   const logo = $('#brandLogo');
-  if (logo) logo.innerHTML = S.settings.logo ? `<img src="${S.settings.logo}" alt="logo">` : '🍽️';
+  if (logo) logo.innerHTML = S.settings.logo ? `<img src="${S.settings.logo}" alt="logo">` : icon('utensils', 17);
 }
 
 /* ---------- Redimensionar imágenes (para no llenar el almacenamiento) ---------- */
@@ -188,13 +190,46 @@ modalBackdrop.addEventListener('click', (e) => { if (e.target === modalBackdrop)
 /* ============================================================
    VISTA: VENDER (Punto de venta)
    ============================================================ */
+/* ---------- Íconos (SVG, sin emoji ambiguos) ---------- */
+const ICON_PATHS = {
+  eye: '<circle cx="12" cy="12" r="3"/><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/>',
+  eyeOff: '<path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c6 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.53 13.53 0 0 0 2 12s4 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/>',
+  edit: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  receipt: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6"/><path d="M9 17h6"/>',
+  chat: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+  printer: '<path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+  close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>',
+  truck: '<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/>',
+  box: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7 12 12l8.7-5"/><path d="M12 22V12"/>',
+  checkCircle: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  mapPin: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
+  cash: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01"/><path d="M18 12h.01"/>',
+  card: '<rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/>',
+  trendingUp: '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
+  award: '<circle cx="12" cy="8" r="6"/><path d="M15.48 13.5 17 22l-5-3-5 3 1.52-8.5"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
+  palette: '<circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.6 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.6 1.6-1.6H16c3.3 0 6-2.7 6-6 0-4.4-4.5-8-10-8Z"/>',
+  rocket: '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
+  cart: '<circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"/>',
+  utensils: '<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>',
+  tag: '<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42Z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+};
+function icon(name, size) {
+  return `<svg viewBox="0 0 24 24" width="${size || 18}" height="${size || 18}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[name] || ''}</svg>`;
+}
+
 const CAT_COLORS = ['#e11d48', '#2563eb', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
 function catColor(cat) {
   const i = S.settings.categories.indexOf(cat);
   return CAT_COLORS[(i < 0 ? 0 : i) % CAT_COLORS.length];
 }
 
-let checkout = { type: 'domicilio', payment: 'efectivo', deliveryFee: 0, cash: '' };
+let checkout = { type: 'domicilio', payment: 'efectivo', deliveryFee: 0, cash: '', discountType: 'percent', discountValue: '' };
 
 function renderPOS() {
   $('#brandName').textContent = S.settings.restaurantName || 'Punto de Venta';
@@ -215,12 +250,12 @@ function renderPOS() {
   const grid = $('#productGrid');
   if (!S.products.some((p) => p.active)) {
     grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
-      <span class="emoji">🍽️</span>
+      <span class="emoji">${icon('utensils',42)}</span>
       No tienes productos todavía.<br>Ve a <strong>Menú</strong> para agregarlos.
     </div>`;
   } else if (list.length === 0) {
     grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
-      <span class="emoji">🔍</span>No se encontraron productos.</div>`;
+      <span class="emoji">${icon('search',42)}</span>No se encontraron productos.</div>`;
   } else {
     grid.innerHTML = list.map((p) => {
       const line = S.cart.find((i) => i.productId === p.id);
@@ -244,11 +279,24 @@ function renderCartFab() {
   if (count === 0) { fab.hidden = true; return; }
   fab.hidden = false;
   $('#cartFabCount').textContent = count;
-  const total = cartSubtotal() + (checkout.type === 'domicilio' ? Number(checkout.deliveryFee || 0) : 0);
-  $('#cartFabTotal').textContent = money(total);
+  $('#cartFabTotal').textContent = money(computeTotals().total);
 }
 
 function cartSubtotal() { return S.cart.reduce((s, i) => s + i.price * i.qty, 0); }
+
+// Calcula subtotal, descuento, envío y total a partir del carrito y el estado del cobro.
+function computeTotals() {
+  const subtotal = cartSubtotal();
+  const fee = checkout.type === 'domicilio' ? Number(checkout.deliveryFee || 0) : 0;
+  const dv = Number(checkout.discountValue) || 0;
+  let discountAmount = 0;
+  if (dv > 0) {
+    discountAmount = checkout.discountType === 'fixed' ? dv : subtotal * (dv / 100);
+    discountAmount = Math.min(discountAmount, subtotal);
+  }
+  const total = Math.max(0, subtotal - discountAmount + fee);
+  return { subtotal, fee, discountAmount, total };
+}
 
 function addToCart(productId) {
   const p = S.products.find((x) => x.id === productId);
@@ -272,9 +320,7 @@ function changeQty(productId, delta) {
 /* ---------- Panel del pedido (al lado en compu, hoja en teléfono) ---------- */
 function renderOrderPanel() {
   const panel = $('#orderPanel');
-  const subtotal = cartSubtotal();
-  const fee = checkout.type === 'domicilio' ? Number(checkout.deliveryFee || 0) : 0;
-  const total = subtotal + fee;
+  const { subtotal, fee, discountAmount, total } = computeTotals();
 
   const items = S.cart.map((i) => `
     <div class="cart-item">
@@ -292,24 +338,25 @@ function renderOrderPanel() {
 
   panel.innerHTML = `
     <div class="op-head">
-      <h2>🧾 Pedido</h2>
+      <h2>${icon('receipt')} Pedido</h2>
       <div style="display:flex;gap:8px;align-items:center">
         ${S.cart.length ? `<button class="op-clear" data-clearcart>Vaciar</button>` : ''}
-        <button class="op-close" data-closesheet>✕</button>
+        <button class="op-close" data-closesheet>${icon('close',16)}</button>
       </div>
     </div>
     <div class="op-type">
       <div class="seg">
-        <button data-type="domicilio" class="${checkout.type === 'domicilio' ? 'active' : ''}">🛵 Domicilio</button>
-        <button data-type="llevar" class="${checkout.type === 'llevar' ? 'active' : ''}">🥡 Para llevar</button>
+        <button data-type="domicilio" class="${checkout.type === 'domicilio' ? 'active' : ''}">${icon('truck',16)} Domicilio</button>
+        <button data-type="llevar" class="${checkout.type === 'llevar' ? 'active' : ''}">${icon('box',16)} Para llevar</button>
       </div>
     </div>
     <div class="op-items">
-      ${S.cart.length ? items : `<div class="op-empty"><span class="emoji">🛒</span>Toca un producto<br>para agregarlo al pedido</div>`}
+      ${S.cart.length ? items : `<div class="op-empty"><span class="emoji">${icon('cart',38)}</span>Toca un producto<br>para agregarlo al pedido</div>`}
     </div>
     <div class="op-foot">
       <div class="totals">
         <div class="total-line"><span class="muted">Subtotal</span><span>${money(subtotal)}</span></div>
+        ${discountAmount > 0 ? `<div class="total-line"><span class="muted">Descuento</span><span>-${money(discountAmount)}</span></div>` : ''}
         ${checkout.type === 'domicilio' ? `<div class="total-line"><span class="muted">Envío</span><span>${money(fee)}</span></div>` : ''}
         <div class="total-line grand"><span>Total</span><span>${money(total)}</span></div>
       </div>
@@ -334,16 +381,16 @@ function closeSheet() {
 
 /* ---------- Modal de cobro ---------- */
 function openCheckout() {
-  const subtotal = cartSubtotal();
-  const total = subtotal + (checkout.type === 'domicilio' ? checkout.deliveryFee : 0);
+  const { subtotal, fee, discountAmount, total } = computeTotals();
   const cashNum = parseFloat(checkout.cash) || 0;
   const change = cashNum - total;
+  const currency = S.settings.currency || '$';
 
   const customerFields = checkout.type === 'domicilio' ? `
     <div class="field"><label>Nombre del cliente</label><input id="cName" placeholder="Ej. Juan Pérez" value="${escapeHtml(checkout.cName || '')}"></div>
     <div class="field"><label>Teléfono</label><input id="cPhone" type="tel" inputmode="tel" placeholder="10 dígitos" value="${escapeHtml(checkout.cPhone || '')}"></div>
     <div class="field"><label>Dirección de entrega</label><textarea id="cAddress" rows="2" placeholder="Calle, número, colonia, referencias">${escapeHtml(checkout.cAddress || '')}</textarea></div>
-    <div class="field"><label>Costo de envío</label><input id="cFee" type="number" inputmode="decimal" min="0" value="${checkout.deliveryFee}"></div>
+    <div class="field"><label>Costo de envío</label><input id="cFee" type="text" inputmode="decimal" value="${checkout.deliveryFee}"></div>
     <div class="field"><label>Notas del pedido (opcional)</label><input id="cNotes" placeholder="Ej. sin cebolla" value="${escapeHtml(checkout.cNotes || '')}"></div>
   ` : `
     <div class="field"><label>Nombre (opcional)</label><input id="cName" placeholder="Para identificar el pedido" value="${escapeHtml(checkout.cName || '')}"></div>
@@ -351,28 +398,39 @@ function openCheckout() {
   `;
 
   const cashSection = checkout.payment === 'efectivo' ? `
-    <div class="field"><label>¿Con cuánto paga?</label><input id="cCash" type="number" inputmode="decimal" min="0" placeholder="0" value="${escapeHtml(checkout.cash)}"></div>
-    ${cashNum > 0 ? `<div class="change-box ${change < 0 ? 'neg' : ''}">${change < 0 ? 'Faltan ' + money(-change) : 'Cambio: ' + money(change)}</div>` : ''}
+    <div class="field"><label>¿Con cuánto paga?</label><input id="cCash" type="text" inputmode="decimal" placeholder="0" value="${escapeHtml(checkout.cash)}"></div>
+    <div class="change-box ${change < 0 ? 'neg' : ''}" id="changeBox" ${cashNum > 0 ? '' : 'hidden'}>${change < 0 ? 'Faltan ' + money(-change) : 'Cambio: ' + money(change)}</div>
   ` : '';
 
   openModal(`
     <div class="modal-head">
-      <h2>Cobrar ${money(total)}</h2>
-      <button class="modal-close" data-close>✕</button>
+      <h2 id="checkoutTitle">Cobrar ${money(total)}</h2>
+      <button class="modal-close" data-close>${icon('close',16)}</button>
     </div>
     <div class="modal-body">
       ${customerFields}
       <div class="field" style="margin-top:6px">
+        <label>${icon('tag', 15)} Descuento (opcional)</label>
+        <div class="discount-row">
+          <div class="seg seg-mini" id="discSeg">
+            <button data-disctype="percent" class="${checkout.discountType === 'percent' ? 'active' : ''}">%</button>
+            <button data-disctype="fixed" class="${checkout.discountType === 'fixed' ? 'active' : ''}">${escapeHtml(currency)}</button>
+          </div>
+          <input id="cDiscount" type="text" inputmode="decimal" placeholder="0" value="${escapeHtml(String(checkout.discountValue || ''))}">
+        </div>
+      </div>
+      <div class="field" style="margin-top:6px">
         <label>Forma de pago</label>
         <div class="seg" id="paySeg">
-          <button data-pay="efectivo" class="${checkout.payment === 'efectivo' ? 'active' : ''}">💵 Efectivo</button>
-          <button data-pay="transferencia" class="${checkout.payment === 'transferencia' ? 'active' : ''}">💳 Transf./Tarjeta</button>
+          <button data-pay="efectivo" class="${checkout.payment === 'efectivo' ? 'active' : ''}">${icon('cash',16)} Efectivo</button>
+          <button data-pay="transferencia" class="${checkout.payment === 'transferencia' ? 'active' : ''}">${icon('card',16)} Transf./Tarjeta</button>
         </div>
       </div>
       ${cashSection}
-      <div class="totals">
+      <div class="totals" id="checkoutTotals">
         <div class="total-line"><span class="muted">Subtotal</span><span>${money(subtotal)}</span></div>
-        ${checkout.type === 'domicilio' ? `<div class="total-line"><span class="muted">Envío</span><span>${money(checkout.deliveryFee)}</span></div>` : ''}
+        ${discountAmount > 0 ? `<div class="total-line"><span class="muted">Descuento</span><span>-${money(discountAmount)}</span></div>` : ''}
+        ${checkout.type === 'domicilio' ? `<div class="total-line"><span class="muted">Envío</span><span>${money(fee)}</span></div>` : ''}
         <div class="total-line grand"><span>Total</span><span>${money(total)}</span></div>
       </div>
     </div>
@@ -381,6 +439,35 @@ function openCheckout() {
       <button class="btn btn-success btn-block" id="confirmSale">Confirmar venta</button>
     </div>
   `);
+}
+
+// Recalcula el total y el cambio SIN reconstruir la ventana (no toca los campos
+// donde el usuario está escribiendo, para no perder el cursor).
+function updateCheckoutTotals() {
+  if (modalBackdrop.hidden || !$('#checkoutTotals')) return;
+  const { subtotal, fee, discountAmount, total } = computeTotals();
+  const cashNum = parseFloat(checkout.cash) || 0;
+  const change = cashNum - total;
+
+  $('#checkoutTotals').innerHTML = `
+    <div class="total-line"><span class="muted">Subtotal</span><span>${money(subtotal)}</span></div>
+    ${discountAmount > 0 ? `<div class="total-line"><span class="muted">Descuento</span><span>-${money(discountAmount)}</span></div>` : ''}
+    ${checkout.type === 'domicilio' ? `<div class="total-line"><span class="muted">Envío</span><span>${money(fee)}</span></div>` : ''}
+    <div class="total-line grand"><span>Total</span><span>${money(total)}</span></div>
+  `;
+  const title = $('#checkoutTitle');
+  if (title) title.textContent = 'Cobrar ' + money(total);
+
+  const changeBox = $('#changeBox');
+  if (changeBox) {
+    if (cashNum > 0) {
+      changeBox.hidden = false;
+      changeBox.className = 'change-box' + (change < 0 ? ' neg' : '');
+      changeBox.textContent = change < 0 ? 'Faltan ' + money(-change) : 'Cambio: ' + money(change);
+    } else {
+      changeBox.hidden = true;
+    }
+  }
 }
 
 // Guarda los valores que el usuario escribió en el cobro (para no perderlos al re-dibujar)
@@ -392,13 +479,12 @@ function captureCheckoutInputs() {
   if (g('cNotes') !== undefined) checkout.cNotes = g('cNotes');
   if (g('cFee') !== undefined) checkout.deliveryFee = Number(g('cFee')) || 0;
   if (g('cCash') !== undefined) checkout.cash = g('cCash');
+  if (g('cDiscount') !== undefined) checkout.discountValue = g('cDiscount');
 }
 
 function confirmSale() {
   captureCheckoutInputs();
-  const subtotal = cartSubtotal();
-  const deliveryFee = checkout.type === 'domicilio' ? Number(checkout.deliveryFee || 0) : 0;
-  const total = subtotal + deliveryFee;
+  const { subtotal, fee: deliveryFee, discountAmount, total } = computeTotals();
   const cashNum = parseFloat(checkout.cash) || 0;
 
   if (checkout.payment === 'efectivo' && cashNum > 0 && cashNum < total) {
@@ -418,6 +504,9 @@ function confirmSale() {
       notes: checkout.cNotes || '',
     },
     subtotal,
+    discountType: checkout.discountType,
+    discountValue: Number(checkout.discountValue) || 0,
+    discountAmount,
     deliveryFee,
     total,
     payment: checkout.payment,
@@ -432,7 +521,7 @@ function confirmSale() {
 
   // Limpiar carrito y datos de cobro
   S.cart = [];
-  checkout = { type: 'domicilio', payment: 'efectivo', deliveryFee: 0, cash: '' };
+  checkout = { type: 'domicilio', payment: 'efectivo', deliveryFee: 0, cash: '', discountType: 'percent', discountValue: '' };
 
   updateDayTotal();
   closeSheet();
@@ -464,12 +553,14 @@ function ticketHtml(o) {
     ${S.settings.phone ? `<div class="t-center">Tel: ${escapeHtml(S.settings.phone)}</div>` : ''}
     ${S.settings.address ? `<div class="t-center">${escapeHtml(S.settings.address)}</div>` : ''}
     <hr>
-    <div class="t-row"><span>Folio #${o.folio}</span><span>${o.type === 'domicilio' ? 'DOMICILIO' : 'PARA LLEVAR'}</span></div>
-    <div>${fmtDate(o.date)} ${fmtTime(o.date)}</div>
+    <div class="t-row"><span>Folio #${o.folio}</span><span>${fmtTime(o.date)}</span></div>
+    <div>${fmtDate(o.date)}</div>
+    <div class="t-order-type">${o.type === 'domicilio' ? 'Pedido a domicilio' : 'Pedido para llevar'}</div>
     <hr>
     ${lines}
     <hr>
     <div class="t-row"><span>Subtotal</span><span>${money(o.subtotal)}</span></div>
+    ${o.discountAmount ? `<div class="t-row"><span>Descuento${o.discountType === 'percent' ? ` (${o.discountValue}%)` : ''}</span><span>-${money(o.discountAmount)}</span></div>` : ''}
     ${o.deliveryFee ? `<div class="t-row"><span>Envío</span><span>${money(o.deliveryFee)}</span></div>` : ''}
     <div class="t-row t-total"><span>TOTAL</span><span>${money(o.total)}</span></div>
     <div class="t-row"><span>Pago</span><span>${payLabel}</span></div>
@@ -484,13 +575,13 @@ function ticketHtml(o) {
 function showTicket(o) {
   openModal(`
     <div class="modal-head">
-      <h2>✅ Venta guardada</h2>
-      <button class="modal-close" data-close>✕</button>
+      <h2>${icon('checkCircle')} Venta guardada</h2>
+      <button class="modal-close" data-close>${icon('close',16)}</button>
     </div>
     <div class="modal-body">${ticketHtml(o)}</div>
     <div class="modal-foot" style="flex-wrap:wrap">
-      <button class="btn" id="printTicket">🖨️ Imprimir</button>
-      <button class="btn" id="waTicket">📱 WhatsApp</button>
+      <button class="btn" id="printTicket">${icon('printer')} Imprimir</button>
+      <button class="btn" id="waTicket">${icon('chat')} WhatsApp</button>
       <button class="btn btn-primary btn-block" data-close style="flex:1 1 100%">Nueva venta</button>
     </div>
   `);
@@ -501,17 +592,29 @@ function printTicket(o) {
   let area = $('#printArea');
   if (!area) { area = document.createElement('div'); area.id = 'printArea'; document.body.appendChild(area); }
   area.innerHTML = ticketHtml(o);
+
+  // El navegador imprime el título de la pestaña en el encabezado de la hoja.
+  // Lo cambiamos por el folio para que no diga "Punto de Venta".
+  const prevTitle = document.title;
+  document.title = `${S.settings.restaurantName || 'Ticket'} - Folio ${o.folio}`;
   window.print();
+  setTimeout(() => { document.title = prevTitle; }, 500);
+
+  if (!DB.get('mv_printhint_shown', false)) {
+    DB.set('mv_printhint_shown', true);
+    toast('Tip: en "Más opciones" del cuadro de impresión, desactiva "Encabezados y pies" para un ticket más limpio');
+  }
 }
 
 function whatsappTicket(o) {
   const L = [];
   L.push(`*${S.settings.restaurantName || 'Restaurante'}*`);
-  L.push(`Folio #${o.folio} — ${o.type === 'domicilio' ? 'Domicilio' : 'Para llevar'}`);
+  L.push(`Folio #${o.folio} — ${o.type === 'domicilio' ? 'Pedido a domicilio' : 'Pedido para llevar'}`);
   L.push('');
   o.items.forEach((i) => L.push(`${i.qty}x ${i.name} — ${money(i.price * i.qty)}`));
   L.push('');
   L.push(`Subtotal: ${money(o.subtotal)}`);
+  if (o.discountAmount) L.push(`Descuento${o.discountType === 'percent' ? ` (${o.discountValue}%)` : ''}: -${money(o.discountAmount)}`);
   if (o.deliveryFee) L.push(`Envío: ${money(o.deliveryFee)}`);
   L.push(`*Total: ${money(o.total)}*`);
   L.push(`Pago: ${o.payment === 'efectivo' ? 'Efectivo' : 'Transferencia/Tarjeta'}`);
@@ -566,13 +669,13 @@ function updateActiveBadge() {
 function renderPedidos() {
   const active = activeOrders().sort((a, b) => a.date - b.date); // más antiguos primero
   $('#pedidosHead').innerHTML = `
-    <h2 class="pedidos-title">🛵 Pedidos activos <span class="count-chip">${active.length}</span></h2>
+    <h2 class="pedidos-title">${icon('truck')} Pedidos activos <span class="count-chip">${active.length}</span></h2>
     <p class="field-hint">Toca el botón grande para avanzar el estado. Al entregar, el pedido pasa al Historial.</p>
   `;
 
   if (active.length === 0) {
     $('#pedidosList').innerHTML = `<div class="empty-state">
-      <span class="emoji">✅</span>No hay pedidos pendientes.<br>Las ventas nuevas aparecen aquí para darles seguimiento.</div>`;
+      <span class="emoji">${icon('checkCircle',42)}</span>No hay pedidos pendientes.<br>Las ventas nuevas aparecen aquí para darles seguimiento.</div>`;
     return;
   }
 
@@ -589,20 +692,20 @@ function renderPedidos() {
             <span class="o-folio">#${o.folio}</span>
             <span class="tag tag-${o.type}">${dom ? 'Domicilio' : 'Para llevar'}</span>
           </div>
-          <span class="status-pill" style="background:${st.color}1a;color:${st.color}">${st.emoji} ${st.label}</span>
+          <span class="status-pill" style="background:${st.color}1a;color:${st.color}">${icon(st.icon,15)} ${st.label}</span>
         </div>
         <div class="pc-items">${itemsTxt}</div>
-        ${dom && o.customer.address ? `<div class="pc-addr">📍 ${escapeHtml(o.customer.address)}${o.customer.name ? ' · ' + escapeHtml(o.customer.name) : ''}</div>` : ''}
+        ${dom && o.customer.address ? `<div class="pc-addr">${icon('mapPin',14)} ${escapeHtml(o.customer.address)}${o.customer.name ? ' · ' + escapeHtml(o.customer.name) : ''}</div>` : ''}
         <div class="pc-meta">
-          <span>${money(o.total)} · ${o.payment === 'efectivo' ? '💵 Efectivo' : '💳 Transf.'}</span>
+          <span>${money(o.total)} · ${o.payment === 'efectivo' ? icon('cash',13) + ' Efectivo' : icon('card',13) + ' Transf.'}</span>
           <span>${minsAgo(o.date)}</span>
         </div>
         <div class="pc-actions">
           ${nextMeta
-            ? `<button class="btn btn-primary btn-block" data-advance="${o.id}" style="background:${nextMeta.color};border-color:${nextMeta.color}">Marcar: ${nextMeta.emoji} ${nextMeta.label}</button>`
+            ? `<button class="btn btn-primary btn-block" data-advance="${o.id}" style="background:${nextMeta.color};border-color:${nextMeta.color}">Marcar: ${icon(nextMeta.icon,15)} ${nextMeta.label}</button>`
             : ''}
-          <button class="icon-btn" data-order="${o.id}" title="Ver detalle">👁️</button>
-          ${dom && o.customer.phone ? `<button class="icon-btn" data-wapp="${o.id}" title="WhatsApp al cliente">💬</button>` : ''}
+          <button class="icon-btn-label" data-order="${o.id}">${icon('receipt')}<span>Detalle</span></button>
+          ${dom && o.customer.phone ? `<button class="icon-btn-label" data-wapp="${o.id}">${icon('chat')}<span>Avisar</span></button>` : ''}
         </div>
       </div>`;
   }).join('');
@@ -617,7 +720,7 @@ function advanceStatus(id) {
   saveOrders();
   updateActiveBadge();
   renderPedidos();
-  toast(n === 'entregado' ? 'Pedido entregado 🏁' : `Ahora: ${STATUS[n].label}`);
+  toast(n === 'entregado' ? 'Pedido entregado' : `Ahora: ${STATUS[n].label}`);
 }
 
 function renderHistorial() {
@@ -630,6 +733,7 @@ function renderHistorial() {
   const cash = orders.filter((o) => o.payment === 'efectivo').reduce((s, o) => s + o.total, 0);
   const transfer = total - cash;
   const nDom = orders.filter((o) => o.type === 'domicilio').length;
+  const discounts = orders.reduce((s, o) => s + (o.discountAmount || 0), 0);
 
   // Selector de periodo + tarjetas de resumen
   $('#histSummary').innerHTML = `
@@ -640,9 +744,10 @@ function renderHistorial() {
       <div class="stat-card"><div class="s-label">Ventas</div><div class="s-value">${money(total)}</div></div>
       <div class="stat-card"><div class="s-label">Pedidos</div><div class="s-value">${orders.length}</div></div>
       <div class="stat-card"><div class="s-label">Ticket prom.</div><div class="s-value">${money(avg)}</div></div>
-      <div class="stat-card"><div class="s-label">💵 Efectivo</div><div class="s-value">${money(cash)}</div></div>
-      <div class="stat-card"><div class="s-label">💳 Transf./Tarjeta</div><div class="s-value">${money(transfer)}</div></div>
-      <div class="stat-card"><div class="s-label">🛵 A domicilio</div><div class="s-value">${nDom}</div></div>
+      <div class="stat-card"><div class="s-label">${icon('cash')} Efectivo</div><div class="s-value">${money(cash)}</div></div>
+      <div class="stat-card"><div class="s-label">${icon('card')} Transf./Tarjeta</div><div class="s-value">${money(transfer)}</div></div>
+      <div class="stat-card"><div class="s-label">${icon('truck')} A domicilio</div><div class="s-value">${nDom}</div></div>
+      ${discounts > 0 ? `<div class="stat-card"><div class="s-label">${icon('tag')} Descuentos</div><div class="s-value">${money(discounts)}</div></div>` : ''}
     </div>
   `;
 
@@ -659,7 +764,7 @@ function renderHistorial() {
     const maxDay = Math.max(1, ...perDay.map((x) => x.total));
     salesChart = `
       <div class="chart-card">
-        <h3>📈 Ventas por día</h3>
+        <h3>${icon('trendingUp')} Ventas por día</h3>
         <div class="bar-chart">
           ${perDay.map((x) => `
             <div class="bar-row">
@@ -678,7 +783,7 @@ function renderHistorial() {
   const maxCount = top.length ? top[0][1] : 1;
   const topChart = top.length ? `
     <div class="chart-card">
-      <h3>🏆 Más vendidos</h3>
+      <h3>${icon('award')} Más vendidos</h3>
       <div class="bar-chart">
         ${top.map(([name, c]) => `
           <div class="bar-row">
@@ -692,7 +797,7 @@ function renderHistorial() {
   // Lista de pedidos del periodo, agrupada por día
   let listHtml = '';
   if (orders.length === 0) {
-    listHtml = `<div class="empty-state"><span class="emoji">📊</span>No hay ventas en este periodo.</div>`;
+    listHtml = `<div class="empty-state"><span class="emoji">${icon('trendingUp',42)}</span>No hay ventas en este periodo.</div>`;
   } else {
     let lastDay = null;
     orders.forEach((o) => {
@@ -708,7 +813,8 @@ function renderHistorial() {
             <div class="o-folio">#${o.folio}
               <span class="tag tag-${o.type}">${o.type === 'domicilio' ? 'Domicilio' : 'Llevar'}</span>
               <span class="tag tag-${o.payment}">${o.payment === 'efectivo' ? 'Efectivo' : 'Transf.'}</span>
-              ${o.status && o.status !== 'entregado' ? `<span class="tag" style="background:${STATUS[o.status].color}1a;color:${STATUS[o.status].color}">${STATUS[o.status].emoji} ${STATUS[o.status].label}</span>` : ''}
+              ${o.discountAmount ? `<span class="tag tag-discount">${icon('tag',12)} -${money(o.discountAmount)}</span>` : ''}
+              ${o.status && o.status !== 'entregado' ? `<span class="tag" style="background:${STATUS[o.status].color}1a;color:${STATUS[o.status].color}">${icon(STATUS[o.status].icon,13)} ${STATUS[o.status].label}</span>` : ''}
             </div>
             <div class="o-meta">${fmtTime(o.date)} · ${o.items.reduce((s, i) => s + i.qty, 0)} art.${o.customer.name ? ' · ' + escapeHtml(o.customer.name) : ''}</div>
           </div>
@@ -728,22 +834,22 @@ function openOrderDetail(id) {
   const statusBar = `
     <div class="detail-status">
       <span>Estado:</span>
-      <span class="status-pill" style="background:${st.color}1a;color:${st.color}">${st.emoji} ${st.label}</span>
+      <span class="status-pill" style="background:${st.color}1a;color:${st.color}">${icon(st.icon,15)} ${st.label}</span>
       ${nextMeta ? `<button class="btn btn-primary" data-advance="${o.id}" style="background:${nextMeta.color};border-color:${nextMeta.color};margin-left:auto">→ ${nextMeta.label}</button>` : ''}
     </div>`;
   openModal(`
     <div class="modal-head">
       <h2>Pedido #${o.folio}</h2>
-      <button class="modal-close" data-close>✕</button>
+      <button class="modal-close" data-close>${icon('close',16)}</button>
     </div>
     <div class="modal-body">
       ${statusBar}
       ${ticketHtml(o)}
     </div>
     <div class="modal-foot" style="flex-wrap:wrap">
-      <button class="btn" id="printTicket">🖨️ Imprimir</button>
-      <button class="btn" id="waTicket">📱 WhatsApp</button>
-      <button class="btn btn-danger" id="deleteOrder">🗑️ Borrar</button>
+      <button class="btn" id="printTicket">${icon('printer')} Imprimir</button>
+      <button class="btn" id="waTicket">${icon('chat')} WhatsApp</button>
+      <button class="btn btn-danger" id="deleteOrder">${icon('trash')} Borrar</button>
     </div>
   `);
   modalEl.dataset.orderId = o.id;
@@ -755,7 +861,7 @@ function openOrderDetail(id) {
 function renderMenu() {
   const wrap = $('#menuAdmin');
   if (S.products.length === 0) {
-    wrap.innerHTML = `<div class="empty-state"><span class="emoji">🍔</span>No hay productos. Agrega el primero.</div>`;
+    wrap.innerHTML = `<div class="empty-state"><span class="emoji">${icon('utensils',42)}</span>No hay productos. Agrega el primero.</div>`;
     return;
   }
   const cats = [...new Set(S.products.map((p) => p.category))];
@@ -764,14 +870,14 @@ function renderMenu() {
       <h3 class="menu-cat-title">${escapeHtml(cat)}</h3>
       ${S.products.filter((p) => p.category === cat).map((p) => `
         <div class="menu-row">
-          <div class="m-thumb" style="${p.image ? `background-image:url('${p.image}')` : ''}">${p.image ? '' : '🍽️'}</div>
+          <div class="m-thumb" style="${p.image ? `background-image:url('${p.image}')` : ''}">${p.image ? '' : icon('utensils',20)}</div>
           <div class="m-info">
             <div class="m-name ${p.active ? '' : 'off'}">${escapeHtml(p.name)}</div>
             <div class="m-price">${money(p.price)}</div>
           </div>
-          <button class="icon-btn" data-toggle="${p.id}" title="${p.active ? 'Ocultar' : 'Mostrar'}">${p.active ? '👁️' : '🚫'}</button>
-          <button class="icon-btn" data-edit="${p.id}" title="Editar">✏️</button>
-          <button class="icon-btn" data-delete="${p.id}" title="Borrar">🗑️</button>
+          <button class="icon-btn" data-toggle="${p.id}" title="${p.active ? 'Ocultar del menú' : 'Mostrar en el menú'}">${icon(p.active ? 'eye' : 'eyeOff')}</button>
+          <button class="icon-btn" data-edit="${p.id}" title="Editar">${icon('edit')}</button>
+          <button class="icon-btn" data-delete="${p.id}" title="Borrar">${icon('trash')}</button>
         </div>`).join('')}
     </div>`).join('');
 }
@@ -786,13 +892,13 @@ function openProductForm(id) {
   openModal(`
     <div class="modal-head">
       <h2>${p ? 'Editar producto' : 'Nuevo producto'}</h2>
-      <button class="modal-close" data-close>✕</button>
+      <button class="modal-close" data-close>${icon('close',16)}</button>
     </div>
     <div class="modal-body">
       <div class="field">
         <label>Imagen (opcional)</label>
         <div class="img-picker">
-          <div class="img-preview" id="imgPreview" style="${productImage ? `background-image:url('${productImage}')` : ''}">${productImage ? '' : '📷'}</div>
+          <div class="img-preview" id="imgPreview" style="${productImage ? `background-image:url('${productImage}')` : ''}">${productImage ? '' : icon('image',24)}</div>
           <div class="img-actions">
             <button type="button" class="btn" id="pickImg">${productImage ? 'Cambiar' : 'Elegir imagen'}</button>
             <button type="button" class="btn btn-ghost" id="removeImg" ${productImage ? '' : 'hidden'}>Quitar</button>
@@ -803,7 +909,7 @@ function openProductForm(id) {
       <div class="field"><label>Nombre</label><input id="pName" placeholder="Ej. Hamburguesa" value="${p ? escapeHtml(p.name) : ''}"></div>
       <div class="field"><label>Precio</label><input id="pPrice" type="number" inputmode="decimal" min="0" placeholder="0" value="${p ? p.price : ''}"></div>
       <div class="field"><label>Categoría</label>
-        <select id="pCat">${catOptions}<option value="__new__">➕ Nueva categoría…</option></select>
+        <select id="pCat">${catOptions}<option value="__new__">+ Nueva categoría…</option></select>
       </div>
       <div class="field" id="newCatField" hidden><label>Nombre de la nueva categoría</label><input id="pNewCat" placeholder="Ej. Combos"></div>
     </div>
@@ -863,7 +969,7 @@ function renderSettings() {
     <div class="field">
       <label>Logo del negocio (opcional)</label>
       <div class="img-picker">
-        <div class="img-preview" id="logoPreview" style="${s.logo ? `background-image:url('${s.logo}')` : ''}">${s.logo ? '' : '🍽️'}</div>
+        <div class="img-preview" id="logoPreview" style="${s.logo ? `background-image:url('${s.logo}')` : ''}">${s.logo ? '' : icon('utensils',24)}</div>
         <div class="img-actions">
           <button type="button" class="btn" id="pickLogo">${s.logo ? 'Cambiar' : 'Elegir logo'}</button>
           <button type="button" class="btn btn-ghost" id="removeLogo" ${s.logo ? '' : 'hidden'}>Quitar</button>
@@ -881,21 +987,21 @@ function renderSettings() {
       <div class="color-presets">
         ${COLOR_PRESETS.map((c) => `<button type="button" class="swatch ${c.toLowerCase() === (s.primaryColor || '').toLowerCase() ? 'active' : ''}" data-color="${c}" style="background:${c}"></button>`).join('')}
         <label class="swatch swatch-custom" title="Color personalizado">
-          🎨<input type="color" id="setColor" value="${escapeHtml(s.primaryColor || '#e11d48')}">
+          ${icon('palette',16)}<input type="color" id="setColor" value="${escapeHtml(s.primaryColor || '#e11d48')}">
         </label>
       </div>
       <span class="field-hint">El cambio se aplica al instante.</span>
     </div>
     <button class="btn btn-primary" id="saveSettings">Guardar cambios</button>
 
-    <button class="btn" id="restartOnboarding" style="margin-top:4px">🚀 Ver guía de inicio otra vez</button>
+    <button class="btn" id="restartOnboarding" style="margin-top:4px">${icon('rocket')} Ver guía de inicio otra vez</button>
 
     <div class="settings-danger">
       <h3 class="menu-cat-title">Datos</h3>
-      <button class="btn" id="exportData">⬇️ Exportar respaldo (JSON)</button>
-      <button class="btn" id="importData" style="margin-top:8px">⬆️ Importar respaldo</button>
+      <button class="btn" id="exportData">${icon('download')} Exportar respaldo (JSON)</button>
+      <button class="btn" id="importData" style="margin-top:8px">${icon('upload')} Importar respaldo</button>
       <input type="file" id="importFile" accept="application/json" hidden>
-      <button class="btn btn-danger" id="clearData" style="margin-top:8px">🗑️ Borrar todas las ventas</button>
+      <button class="btn btn-danger" id="clearData" style="margin-top:8px">${icon('trash')} Borrar todas las ventas</button>
     </div>
     <p class="field-hint" style="text-align:center;margin-top:8px">Los datos se guardan solo en este dispositivo.</p>
   `;
@@ -966,7 +1072,7 @@ function renderOnboarding() {
   let body = '';
   if (obStep === 0) {
     body = `
-      <div class="ob-emoji">🍔</div>
+      <div class="ob-emoji">${icon('utensils',46)}</div>
       <h1>¡Bienvenido!</h1>
       <p>Vamos a configurar tu punto de venta en 3 pasos rápidos.</p>
       <div class="field" style="text-align:left;margin-top:8px">
@@ -977,29 +1083,29 @@ function renderOnboarding() {
       <button class="btn btn-ghost btn-block" data-ob="skip">Saltar por ahora</button>`;
   } else if (obStep === 1) {
     body = `
-      <div class="ob-emoji">🎨</div>
+      <div class="ob-emoji">${icon('palette',46)}</div>
       <h1>Elige tu color</h1>
       <p>Se usará en toda la app. Verás el cambio al instante.</p>
       <div class="color-presets" style="justify-content:center;margin:8px 0 4px">
         ${COLOR_PRESETS.map((c) => `<button type="button" class="swatch ${c.toLowerCase() === obData.color.toLowerCase() ? 'active' : ''}" data-obcolor="${c}" style="background:${c}"></button>`).join('')}
-        <label class="swatch swatch-custom">🎨<input type="color" id="obColor" value="${escapeHtml(obData.color)}"></label>
+        <label class="swatch swatch-custom">${icon('palette',16)}<input type="color" id="obColor" value="${escapeHtml(obData.color)}"></label>
       </div>
       <button class="btn btn-primary btn-block btn-lg" data-ob="next">Continuar →</button>
       <button class="btn btn-ghost btn-block" data-ob="back">← Atrás</button>`;
   } else {
     body = `
-      <div class="ob-emoji">🍽️</div>
+      <div class="ob-emoji">${icon('utensils',46)}</div>
       <h1>Tu menú</h1>
       <p>¿Cómo quieres empezar?</p>
       <button type="button" class="ob-choice ${obData.sample ? 'active' : ''}" data-obsample="1">
-        <strong>🍽️ Con menú de ejemplo</strong>
+        <strong>${icon('utensils',16)} Con menú de ejemplo</strong>
         <small>Trae productos de muestra que puedes editar o borrar. Ideal para aprender rápido.</small>
       </button>
       <button type="button" class="ob-choice ${obData.sample ? '' : 'active'}" data-obsample="0">
-        <strong>✏️ Empezar vacío</strong>
+        <strong>${icon('edit',16)} Empezar vacío</strong>
         <small>Agrego mis propios productos desde cero.</small>
       </button>
-      <button class="btn btn-primary btn-block btn-lg" data-ob="finish">¡Empezar a vender! 🚀</button>
+      <button class="btn btn-primary btn-block btn-lg" data-ob="finish">¡Empezar a vender! ${icon('rocket',16)}</button>
       <button class="btn btn-ghost btn-block" data-ob="back">← Atrás</button>`;
   }
 
@@ -1024,7 +1130,7 @@ function finishOnboarding(skip) {
   applyBranding();
   $('#onboarding').hidden = true;
   switchView('vender');
-  if (!skip) toast('¡Listo! Ya puedes vender 🎉');
+  if (!skip) toast('¡Listo! Ya puedes vender');
 }
 
 /* ============================================================
@@ -1045,7 +1151,7 @@ function switchView(view) {
    EVENTOS (delegación desde el documento)
    ============================================================ */
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-view],[data-add],[data-cat],[data-close],[data-qty],[data-order],[data-toggle],[data-edit],[data-delete],[data-type],[data-pay],[data-clearcart],[data-closesheet],[data-color],[data-period],[data-advance],[data-wapp],[data-ob],[data-obcolor],[data-obsample]');
+  const t = e.target.closest('[data-view],[data-add],[data-cat],[data-close],[data-qty],[data-order],[data-toggle],[data-edit],[data-delete],[data-type],[data-pay],[data-disctype],[data-clearcart],[data-closesheet],[data-color],[data-period],[data-advance],[data-wapp],[data-ob],[data-obcolor],[data-obsample]');
 
   // Navegación
   const nav = e.target.closest('.nav-btn');
@@ -1079,6 +1185,9 @@ document.addEventListener('click', (e) => {
 
   // Cobro: forma de pago
   if (t.dataset.pay) { captureCheckoutInputs(); checkout.payment = t.dataset.pay; openCheckout(); return; }
+
+  // Cobro: tipo de descuento (% o monto fijo)
+  if (t.dataset.disctype) { captureCheckoutInputs(); checkout.discountType = t.dataset.disctype; openCheckout(); return; }
 
   // Ajustes: elegir color de un preset
   if (t.dataset.color) {
@@ -1158,7 +1267,7 @@ document.addEventListener('click', (e) => {
     case 'pickImg': $('#pImgFile').click(); break;
     case 'removeImg': {
       productImage = '';
-      const prev = $('#imgPreview'); if (prev) { prev.style.backgroundImage = ''; prev.textContent = '📷'; }
+      const prev = $('#imgPreview'); if (prev) { prev.style.backgroundImage = ''; prev.innerHTML = icon('image', 24); }
       e.target.hidden = true;
       const pick = $('#pickImg'); if (pick) pick.textContent = 'Elegir imagen';
       break;
@@ -1199,11 +1308,9 @@ document.addEventListener('input', (e) => {
 
 // Guardar lo que se escribe en el cobro (para recalcular cambio en vivo)
 document.addEventListener('input', (e) => {
-  if (e.target.id === 'cCash' || e.target.id === 'cFee') {
+  if (e.target.id === 'cCash' || e.target.id === 'cFee' || e.target.id === 'cDiscount') {
     captureCheckoutInputs();
-    openCheckout();
-    const el = $('#' + e.target.id);
-    if (el) { el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch (_) {} }
+    updateCheckoutTotals();
   }
   if (e.target.id === 'importFile') {
     if (e.target.files && e.target.files[0]) importData(e.target.files[0]);
