@@ -8,6 +8,19 @@
 const $ = (sel, ctx = document) => ctx.querySelector(sel);
 const $$ = (sel, ctx = document) => [...ctx.querySelectorAll(sel)];
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+// Convierte texto escrito por el usuario a número, aceptando coma o punto decimal.
+const parseNum = (str) => parseFloat(String(str ?? '').trim().replace(',', '.')) || 0;
+
+// Deja solo dígitos en un campo de teléfono mientras el usuario escribe,
+// conservando la posición del cursor.
+function filterDigitsInput(el) {
+  const cleaned = el.value.replace(/\D/g, '');
+  if (cleaned !== el.value) {
+    const pos = Math.max(0, el.selectionStart - (el.value.length - cleaned.length));
+    el.value = cleaned;
+    try { el.setSelectionRange(pos, pos); } catch (_) {}
+  }
+}
 
 const money = (n) => {
   const s = S.settings.currency || '$';
@@ -21,7 +34,7 @@ const escapeHtml = (str = '') => String(str).replace(/[&<>"']/g, (c) => (
 
 const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
 const dayKey = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
-const fmtDate = (ts) => new Date(ts).toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
+const fmtDate = (ts) => new Date(ts).toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 const fmtTime = (ts) => new Date(ts).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
 function minsAgo(ts) {
   const m = Math.round((Date.now() - ts) / 60000);
@@ -48,6 +61,11 @@ function nextStatus(o) {
   const i = f.indexOf(o.status || 'preparacion');
   return i >= 0 && i < f.length - 1 ? f[i + 1] : null;
 }
+function previousStatus(o) {
+  const f = statusFlow(o.type);
+  const i = f.indexOf(o.status || 'preparacion');
+  return i > 0 ? f[i - 1] : null;
+}
 
 /* ---------- Almacenamiento ---------- */
 const DB = {
@@ -67,7 +85,10 @@ const DEFAULT_SETTINGS = {
   defaultDeliveryFee: 0,
   primaryColor: '#e11d48',
   logo: '',
+  licenseCode: '',
+  nextFolio: 1,
   categories: ['Platillos', 'Entradas', 'Bebidas', 'Postres'],
+  categoryColors: {},
 };
 const COLOR_PRESETS = ['#e11d48', '#ea580c', '#d97706', '#16a34a', '#0891b2', '#2563eb', '#7c3aed', '#db2777', '#0f172a'];
 const SAMPLE_PRODUCTS = [
@@ -85,6 +106,8 @@ const S = {
   settings: DB.get('mv_settings', null) || DEFAULT_SETTINGS,
   products: DB.get('mv_products', null) || SAMPLE_PRODUCTS,
   orders: DB.get('mv_orders', []),
+  customers: DB.get('mv_customers', []),
+  companies: DB.get('mv_companies', []),
   cart: [],            // [{ productId, name, price, qty }]
   activeCat: 'Todos',
   search: '',
@@ -101,15 +124,105 @@ if (S.settings.onboarded === undefined) {
   DB.set('mv_settings', S.settings);
 }
 
+// Migración: si la instalación ya tenía ventas antes de tener un contador de folios,
+// arrancarlo después del folio más alto que ya existe (para no repetir números).
+if (!S.settings.nextFolio) {
+  const maxFolio = S.orders.reduce((m, o) => Math.max(m, o.folio || 0), 0);
+  S.settings.nextFolio = maxFolio + 1;
+  DB.set('mv_settings', S.settings);
+}
+
+// Entrega un folio nuevo y único cada vez (nunca se repite, aunque se borren ventas).
+function nextFolio() {
+  const folio = S.settings.nextFolio;
+  S.settings.nextFolio = folio + 1;
+  saveSettings();
+  return folio;
+}
+
 function saveProducts() {
   try { DB.set('mv_products', S.products); return true; }
   catch (e) { toast('Almacenamiento lleno. Usa imágenes más pequeñas o quita algunas.'); return false; }
 }
 const saveOrders = () => DB.set('mv_orders', S.orders);
+function saveCustomers() {
+  try { DB.set('mv_customers', S.customers); return true; }
+  catch (e) { toast('Almacenamiento lleno, no se pudo guardar el cliente.'); return false; }
+}
+const customerKey = (phone) => String(phone || '').replace(/\D/g, '');
+// Guarda o actualiza un cliente cuando se confirma una venta con teléfono.
+function upsertCustomer({ name, phone, address, notes, company }) {
+  const key = customerKey(phone);
+  if (!key) return;
+  let c = S.customers.find((x) => x.phone === key);
+  if (c) {
+    if (name) c.name = name;
+    if (address) c.address = address;
+    if (notes) c.notes = notes;
+    if (company) c.company = company;
+    c.updatedAt = Date.now();
+  } else {
+    S.customers.push({ id: uid(), name: name || '', phone: key, address: address || '', notes: notes || '', company: company || '', createdAt: Date.now(), updatedAt: Date.now() });
+  }
+  saveCustomers();
+}
+
+// Empresas: varios clientes (distinto nombre/teléfono) pueden compartir la misma
+// dirección de entrega cuando piden desde la misma empresa/oficina.
+function saveCompanies() {
+  try { DB.set('mv_companies', S.companies); return true; }
+  catch (e) { toast('Almacenamiento lleno, no se pudo guardar la empresa.'); return false; }
+}
+const companyKey = (name) => String(name || '').trim().toLowerCase();
+function upsertCompany({ name, address, phone }) {
+  const key = companyKey(name);
+  if (!key) return null;
+  let co = S.companies.find((x) => companyKey(x.name) === key);
+  if (co) {
+    if (address) co.address = address;
+    if (phone) co.phone = phone;
+    co.updatedAt = Date.now();
+  } else {
+    co = { id: uid(), name: name.trim(), address: address || '', phone: phone || '', createdAt: Date.now(), updatedAt: Date.now() };
+    S.companies.push(co);
+  }
+  saveCompanies();
+  return co;
+}
 function saveSettings() {
   try { DB.set('mv_settings', S.settings); return true; }
   catch (e) { toast('Almacenamiento lleno. Usa un logo/imágenes más pequeñas.'); return false; }
 }
+
+/* ============================================================
+   LICENCIA (prueba gratis + código de activación)
+
+   Este mismo código y clave están en generate-license.js — deben
+   coincidir exactamente para que los códigos generados sean válidos
+   aquí. CAMBIA LICENSE_SALT por tu propio secreto antes de vender,
+   y actualiza el mismo valor en generate-license.js.
+   ============================================================ */
+// Interruptor maestro: en false, nadie ve avisos de prueba/activación (uso familiar/interno).
+// Cámbialo a true cuando quieras empezar a vender a otros negocios.
+const LICENSE_ENFORCED = false;
+const LICENSE_SALT = 'MARVYS-CAMBIA-ESTA-CLAVE-2026';
+const TRIAL_LIMIT = 20; // ventas gratis antes de pedir activación
+const SELLER_WHATSAPP = ''; // tu número con código de país, ej. "5218112345678"
+
+function licenseChecksum(part1, part2) {
+  const str = part1 + part2 + LICENSE_SALT;
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+  return hash.toString(36).toUpperCase().padStart(4, '0').slice(-4);
+}
+function isValidLicense(code) {
+  const clean = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (clean.length !== 12) return false;
+  return licenseChecksum(clean.slice(0, 4), clean.slice(4, 8)) === clean.slice(8, 12);
+}
+function isActivated() { return !LICENSE_ENFORCED || isValidLicense(S.settings.licenseCode); }
+function salesUsed() { return S.orders.length; }
+function trialRemaining() { return Math.max(0, TRIAL_LIMIT - salesUsed()); }
 
 /* ---------- Tema (color del negocio) ---------- */
 function hexToRgb(hex) {
@@ -184,8 +297,38 @@ function closeModal() {
   modalBackdrop.hidden = true;
   modalEl.innerHTML = '';
   document.body.style.overflow = '';
+  pendingConfirmCallback = null;
 }
-modalBackdrop.addEventListener('click', (e) => { if (e.target === modalBackdrop) closeModal(); });
+
+// Ventana de confirmación con el estilo de la app (reemplaza confirm() del navegador).
+let pendingConfirmCallback = null;
+function confirmDialog(message, onConfirm, opts = {}) {
+  const { confirmLabel = 'Confirmar', cancelLabel = 'Cancelar', danger = false } = opts;
+  pendingConfirmCallback = onConfirm;
+  openModal(`
+    <div class="modal-head">
+      <h2>${icon('alert')} Confirmar</h2>
+      <button class="modal-close" data-close>${icon('close', 16)}</button>
+    </div>
+    <div class="modal-body"><p style="margin:0">${escapeHtml(message)}</p></div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close>${escapeHtml(cancelLabel)}</button>
+      <button class="btn ${danger ? 'btn-danger' : 'btn-primary'} btn-block" id="confirmDialogBtn">${escapeHtml(confirmLabel)}</button>
+    </div>
+  `);
+}
+modalBackdrop.addEventListener('click', (e) => {
+  if (e.target !== modalBackdrop) return;
+  if ($('#checkoutTotals')) captureCheckoutInputs();
+  closeModal();
+  if (S.view === 'vender') renderPOS();
+});
+
+// Cierra las listas de autocompletado (clientes/empresas) al tocar fuera de ellas.
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.autocomplete-wrap')) return;
+  $$('.autocomplete-list').forEach((el) => { el.hidden = true; el.innerHTML = ''; });
+});
 
 /* ============================================================
    VISTA: VENDER (Punto de venta)
@@ -200,6 +343,7 @@ const ICON_PATHS = {
   chat: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
   printer: '<path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
   close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>',
   truck: '<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/>',
   box: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7 12 12l8.7-5"/><path d="M12 22V12"/>',
@@ -217,7 +361,11 @@ const ICON_PATHS = {
   upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
   cart: '<circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"/>',
   utensils: '<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  building: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01"/><path d="M12 6h.01"/><path d="M16 6h.01"/><path d="M8 10h.01"/><path d="M12 10h.01"/><path d="M16 10h.01"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
   tag: '<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42Z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
 };
 function icon(name, size) {
   return `<svg viewBox="0 0 24 24" width="${size || 18}" height="${size || 18}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[name] || ''}</svg>`;
@@ -225,11 +373,13 @@ function icon(name, size) {
 
 const CAT_COLORS = ['#e11d48', '#2563eb', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
 function catColor(cat) {
+  const custom = (S.settings.categoryColors || {})[cat];
+  if (custom) return custom;
   const i = S.settings.categories.indexOf(cat);
   return CAT_COLORS[(i < 0 ? 0 : i) % CAT_COLORS.length];
 }
 
-let checkout = { type: 'domicilio', payment: 'efectivo', deliveryFee: 0, cash: '', discountType: 'percent', discountValue: '' };
+let checkout = { type: 'domicilio', payment: 'efectivo', deliveryFee: 0, cash: '', discountType: 'percent', discountValue: '', cCompany: '' };
 
 function renderPOS() {
   $('#brandName').textContent = S.settings.restaurantName || 'Punto de Venta';
@@ -260,9 +410,9 @@ function renderPOS() {
     grid.innerHTML = list.map((p) => {
       const line = S.cart.find((i) => i.productId === p.id);
       const qty = line ? line.qty : 0;
-      return `<button class="product-card ${qty ? 'in-cart' : ''} ${p.image ? 'has-img' : ''}" data-add="${p.id}" style="--cat-color:${catColor(p.category)}">
+      return `<button class="product-card ${qty ? 'in-cart' : ''} ${p.image ? 'has-img' : ''}" data-add="${p.id}" style="--cat-color:${escapeHtml(catColor(p.category))}">
         ${qty ? `<span class="qty-badge">${qty}</span>` : ''}
-        ${p.image ? `<div class="p-img" style="background-image:url('${p.image}')"></div>` : ''}
+        ${p.image ? `<div class="p-img" style="background-image:url('${escapeHtml(p.image)}')"></div>` : ''}
         <div class="p-name">${escapeHtml(p.name)}</div>
         <div class="p-price">${money(p.price)}</div>
         <span class="p-plus">+</span>
@@ -287,8 +437,8 @@ function cartSubtotal() { return S.cart.reduce((s, i) => s + i.price * i.qty, 0)
 // Calcula subtotal, descuento, envío y total a partir del carrito y el estado del cobro.
 function computeTotals() {
   const subtotal = cartSubtotal();
-  const fee = checkout.type === 'domicilio' ? Number(checkout.deliveryFee || 0) : 0;
-  const dv = Number(checkout.discountValue) || 0;
+  const fee = checkout.type === 'domicilio' ? parseNum(checkout.deliveryFee) : 0;
+  const dv = parseNum(checkout.discountValue);
   let discountAmount = 0;
   if (dv > 0) {
     discountAmount = checkout.discountType === 'fixed' ? dv : subtotal * (dv / 100);
@@ -298,6 +448,37 @@ function computeTotals() {
   return { subtotal, fee, discountAmount, total };
 }
 
+// Especificación por producto (ej. "sin cebolla") para un artículo del pedido actual.
+function openItemNoteForm(productId) {
+  const line = S.cart.find((i) => i.productId === productId);
+  if (!line) return;
+  openModal(`
+    <div class="modal-head">
+      <h2>${icon('edit')} Especificación</h2>
+      <button class="modal-close" data-close>${icon('close', 16)}</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin-top:0;color:var(--text-muted);font-size:.9rem">${escapeHtml(line.name)}</p>
+      <div class="field">
+        <label>Nota para este producto (opcional)</label>
+        <input id="itemNoteInput" placeholder="Ej. sin cebolla, término medio" value="${escapeHtml(line.notes || '')}">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close>Cancelar</button>
+      <button class="btn btn-primary btn-block" id="saveItemNote">Guardar</button>
+    </div>
+  `);
+  modalEl.dataset.itemProductId = productId;
+}
+function saveItemNote() {
+  const pid = modalEl.dataset.itemProductId;
+  const line = S.cart.find((i) => i.productId === pid);
+  if (line) line.notes = ($('#itemNoteInput') ? $('#itemNoteInput').value : '').trim();
+  closeModal();
+  renderPOS();
+}
+
 function addToCart(productId) {
   const p = S.products.find((x) => x.id === productId);
   if (!p) return;
@@ -305,7 +486,7 @@ function addToCart(productId) {
   if (line) line.qty++;
   else {
     if (S.cart.length === 0) checkout.deliveryFee = checkout.type === 'domicilio' ? Number(S.settings.defaultDeliveryFee || 0) : 0;
-    S.cart.push({ productId, name: p.name, price: p.price, qty: 1 });
+    S.cart.push({ productId, name: p.name, price: p.price, qty: 1, notes: '' });
   }
   renderPOS();
 }
@@ -322,11 +503,17 @@ function renderOrderPanel() {
   const panel = $('#orderPanel');
   const { subtotal, fee, discountAmount, total } = computeTotals();
 
-  const items = S.cart.map((i) => `
+  const items = S.cart.map((i) => {
+    const prod = S.products.find((p) => p.id === i.productId);
+    return `
     <div class="cart-item">
+      ${prod && prod.image ? `<div class="ci-img" style="background-image:url('${escapeHtml(prod.image)}')"></div>` : ''}
       <div class="ci-info">
         <div class="ci-name">${escapeHtml(i.name)}</div>
         <div class="ci-price">${money(i.price)} c/u</div>
+        ${i.notes
+          ? `<button class="ci-note" data-itemnote="${i.productId}">${icon('edit', 12)} ${escapeHtml(i.notes)}</button>`
+          : `<button class="ci-note-add" data-itemnote="${i.productId}">+ especificación</button>`}
       </div>
       <div class="qty-ctrl">
         <button class="qty-btn" data-qty="${i.productId}" data-delta="-1">−</button>
@@ -334,7 +521,9 @@ function renderOrderPanel() {
         <button class="qty-btn" data-qty="${i.productId}" data-delta="1">+</button>
       </div>
       <div class="ci-total">${money(i.price * i.qty)}</div>
-    </div>`).join('');
+      <button class="icon-btn ci-remove" data-removeitem="${i.productId}" title="Quitar del pedido">${icon('trash', 15)}</button>
+    </div>`;
+  }).join('');
 
   panel.innerHTML = `
     <div class="op-head">
@@ -382,13 +571,24 @@ function closeSheet() {
 /* ---------- Modal de cobro ---------- */
 function openCheckout() {
   const { subtotal, fee, discountAmount, total } = computeTotals();
-  const cashNum = parseFloat(checkout.cash) || 0;
+  const cashNum = parseNum(checkout.cash);
   const change = cashNum - total;
   const currency = S.settings.currency || '$';
 
   const customerFields = checkout.type === 'domicilio' ? `
     <div class="field"><label>Nombre del cliente</label><input id="cName" placeholder="Ej. Juan Pérez" value="${escapeHtml(checkout.cName || '')}"></div>
-    <div class="field"><label>Teléfono</label><input id="cPhone" type="tel" inputmode="tel" placeholder="10 dígitos" value="${escapeHtml(checkout.cPhone || '')}"></div>
+    <div class="field autocomplete-wrap">
+      <label>Teléfono</label>
+      <input id="cPhone" type="tel" inputmode="tel" placeholder="10 dígitos" value="${escapeHtml(checkout.cPhone || '')}" autocomplete="off">
+      <div class="autocomplete-list" id="phoneSuggestions" hidden></div>
+      <span class="field-hint">Si ya compró antes, aparecerá aquí para llenar sus datos. <button type="button" class="link-btn" data-openentity="customers">Ver clientes guardados</button></span>
+    </div>
+    <div class="field autocomplete-wrap">
+      <label>Empresa (opcional)</label>
+      <input id="cCompany" placeholder="Ej. Constructora ABC" value="${escapeHtml(checkout.cCompany || '')}" autocomplete="off">
+      <div class="autocomplete-list" id="companySuggestions" hidden></div>
+      <span class="field-hint">Si varias personas piden desde la misma empresa, se reutiliza su dirección. <button type="button" class="link-btn" data-openentity="companies">Ver empresas guardadas</button></span>
+    </div>
     <div class="field"><label>Dirección de entrega</label><textarea id="cAddress" rows="2" placeholder="Calle, número, colonia, referencias">${escapeHtml(checkout.cAddress || '')}</textarea></div>
     <div class="field"><label>Costo de envío</label><input id="cFee" type="text" inputmode="decimal" value="${checkout.deliveryFee}"></div>
     <div class="field"><label>Notas del pedido (opcional)</label><input id="cNotes" placeholder="Ej. sin cebolla" value="${escapeHtml(checkout.cNotes || '')}"></div>
@@ -446,7 +646,7 @@ function openCheckout() {
 function updateCheckoutTotals() {
   if (modalBackdrop.hidden || !$('#checkoutTotals')) return;
   const { subtotal, fee, discountAmount, total } = computeTotals();
-  const cashNum = parseFloat(checkout.cash) || 0;
+  const cashNum = parseNum(checkout.cash);
   const change = cashNum - total;
 
   $('#checkoutTotals').innerHTML = `
@@ -476,36 +676,107 @@ function captureCheckoutInputs() {
   if (g('cName') !== undefined) checkout.cName = g('cName');
   if (g('cPhone') !== undefined) checkout.cPhone = g('cPhone');
   if (g('cAddress') !== undefined) checkout.cAddress = g('cAddress');
+  if (g('cCompany') !== undefined) checkout.cCompany = g('cCompany');
   if (g('cNotes') !== undefined) checkout.cNotes = g('cNotes');
-  if (g('cFee') !== undefined) checkout.deliveryFee = Number(g('cFee')) || 0;
+  if (g('cFee') !== undefined) checkout.deliveryFee = parseNum(g('cFee'));
   if (g('cCash') !== undefined) checkout.cash = g('cCash');
   if (g('cDiscount') !== undefined) checkout.discountValue = g('cDiscount');
 }
 
-function confirmSale() {
-  captureCheckoutInputs();
-  const { subtotal, fee: deliveryFee, discountAmount, total } = computeTotals();
-  const cashNum = parseFloat(checkout.cash) || 0;
+/* ---------- Autocompletado propio (clientes / empresas) ---------- */
+function renderPhoneSuggestions(query) {
+  const box = $('#phoneSuggestions');
+  if (!box) return;
+  const digits = query.replace(/\D/g, '');
+  const matches = digits ? S.customers.filter((c) => c.phone.includes(digits)).slice(0, 6) : [];
+  if (!matches.length) { box.hidden = true; box.innerHTML = ''; return; }
+  box.innerHTML = matches.map((c) => `
+    <div class="autocomplete-item" data-pickcustomer="${c.id}">
+      <div class="ac-name">${escapeHtml(c.name || 'Sin nombre')}</div>
+      <div class="ac-sub">${escapeHtml(c.phone)}${c.address ? ' · ' + escapeHtml(c.address) : ''}</div>
+    </div>`).join('');
+  box.hidden = false;
+}
+function renderCompanySuggestions(query) {
+  const box = $('#companySuggestions');
+  if (!box) return;
+  const q = query.trim().toLowerCase();
+  const matches = q ? S.companies.filter((co) => co.name.toLowerCase().includes(q)).slice(0, 6) : [];
+  if (!matches.length) { box.hidden = true; box.innerHTML = ''; return; }
+  box.innerHTML = matches.map((co) => `
+    <div class="autocomplete-item" data-pickcompany="${co.id}">
+      <div class="ac-name">${escapeHtml(co.name)}</div>
+      <div class="ac-sub">${co.address ? escapeHtml(co.address) : 'Sin dirección'}</div>
+    </div>`).join('');
+  box.hidden = false;
+}
+function pickCustomerSuggestion(c) {
+  const phoneEl = $('#cPhone');
+  if (phoneEl) { phoneEl.value = c.phone; checkout.cPhone = c.phone; }
+  const nameEl = $('#cName');
+  if (nameEl && !nameEl.value.trim() && c.name) { nameEl.value = c.name; checkout.cName = c.name; }
+  const addrEl = $('#cAddress');
+  if (addrEl && !addrEl.value.trim() && c.address) { addrEl.value = c.address; checkout.cAddress = c.address; }
+  const coEl = $('#cCompany');
+  if (coEl && !coEl.value.trim() && c.company) { coEl.value = c.company; checkout.cCompany = c.company; }
+  const box = $('#phoneSuggestions'); if (box) { box.hidden = true; box.innerHTML = ''; }
+}
+function pickCompanySuggestion(co) {
+  const companyEl = $('#cCompany') || $('#custCompany');
+  if (companyEl) {
+    companyEl.value = co.name;
+    if (companyEl.id === 'cCompany') checkout.cCompany = co.name;
+  }
+  const addrEl = $('#cAddress') || $('#custAddress');
+  if (addrEl && !addrEl.value.trim() && co.address) {
+    addrEl.value = co.address;
+    if (addrEl.id === 'cAddress') checkout.cAddress = co.address;
+  }
+  const box = $('#companySuggestions'); if (box) { box.hidden = true; box.innerHTML = ''; }
+}
 
-  if (checkout.payment === 'efectivo' && cashNum > 0 && cashNum < total) {
-    if (!confirm('El monto recibido es menor al total. ¿Guardar de todos modos?')) return;
+function confirmSale() {
+  if (!isActivated() && salesUsed() >= TRIAL_LIMIT) { closeModal(); openPaywall(); return; }
+
+  captureCheckoutInputs();
+
+  if (checkout.type === 'domicilio') {
+    if (!(checkout.cAddress || '').trim()) { toast('Falta la dirección de entrega'); const el = $('#cAddress'); if (el) el.focus(); return; }
+    if (!(checkout.cPhone || '').trim()) { toast('Falta el teléfono del cliente'); const el = $('#cPhone'); if (el) el.focus(); return; }
   }
 
+  const { subtotal, fee: deliveryFee, discountAmount, total } = computeTotals();
+  const cashNum = parseNum(checkout.cash);
+
+  if (checkout.payment === 'efectivo' && cashNum > 0 && cashNum < total) {
+    confirmDialog(
+      'El monto recibido es menor al total. ¿Guardar de todos modos?',
+      () => finalizeSale({ subtotal, deliveryFee, discountAmount, total, cashNum }),
+      { confirmLabel: 'Guardar de todos modos' }
+    );
+    return;
+  }
+
+  finalizeSale({ subtotal, deliveryFee, discountAmount, total, cashNum });
+}
+
+function finalizeSale({ subtotal, deliveryFee, discountAmount, total, cashNum }) {
   const order = {
     id: uid(),
-    folio: (S.orders.length + 1),
+    folio: nextFolio(),
     date: Date.now(),
-    items: S.cart.map((i) => ({ name: i.name, price: i.price, qty: i.qty })),
+    items: S.cart.map((i) => ({ name: i.name, price: i.price, qty: i.qty, notes: i.notes || '' })),
     type: checkout.type,
     customer: {
       name: checkout.cName || '',
       phone: checkout.cPhone || '',
       address: checkout.cAddress || '',
       notes: checkout.cNotes || '',
+      company: checkout.cCompany || '',
     },
     subtotal,
     discountType: checkout.discountType,
-    discountValue: Number(checkout.discountValue) || 0,
+    discountValue: parseNum(checkout.discountValue),
     discountAmount,
     deliveryFee,
     total,
@@ -518,29 +789,71 @@ function confirmSale() {
   S.orders.unshift(order);
   saveOrders();
   updateActiveBadge();
+  if (order.customer.company) upsertCompany({ name: order.customer.company, address: order.customer.address });
+  if (order.customer.phone) upsertCustomer(order.customer);
 
   // Limpiar carrito y datos de cobro
   S.cart = [];
-  checkout = { type: 'domicilio', payment: 'efectivo', deliveryFee: 0, cash: '', discountType: 'percent', discountValue: '' };
+  checkout = { type: 'domicilio', payment: 'efectivo', deliveryFee: 0, cash: '', discountType: 'percent', discountValue: '', cCompany: '' };
 
   updateDayTotal();
   closeSheet();
   renderPOS();
   showTicket(order);
+
+  if (!isActivated() && trialRemaining() > 0 && trialRemaining() <= 3) {
+    setTimeout(() => toast(`Te quedan ${trialRemaining()} ventas de prueba gratis`), 600);
+  }
+}
+
+/* ---------- Licencia: pantalla de activación / fin de prueba ---------- */
+function openPaywall() {
+  const waLink = SELLER_WHATSAPP
+    ? `https://wa.me/${SELLER_WHATSAPP}?text=${encodeURIComponent('Hola, quiero activar mi Punto de Venta')}`
+    : '';
+  openModal(`
+    <div class="modal-head">
+      <h2>${icon('tag')} Activa tu Punto de Venta</h2>
+      <button class="modal-close" data-close>${icon('close', 16)}</button>
+    </div>
+    <div class="modal-body">
+      <p>Ya usaste tus ${TRIAL_LIMIT} ventas de prueba gratis. Para seguir vendiendo,
+      activa tu licencia con el código que te dieron al comprar.</p>
+      <div class="field">
+        <label>Código de activación</label>
+        <input id="licenseInput" placeholder="XXXX-XXXX-XXXX" autocomplete="off" style="text-transform:uppercase">
+      </div>
+      <button class="btn btn-primary btn-block" id="activateLicenseBtn">Activar</button>
+      ${waLink ? `<a class="btn btn-block" style="margin-top:10px;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px" href="${waLink}" target="_blank">${icon('chat')} Comprar por WhatsApp</a>` : ''}
+      <p class="field-hint" style="text-align:center;margin-top:10px">Tus ventas y tu menú siguen guardados, solo se pausan las ventas nuevas hasta activar.</p>
+    </div>
+  `);
+}
+
+function activateLicense() {
+  const el = $('#licenseInput');
+  const code = el ? el.value : '';
+  if (!isValidLicense(code)) { toast('Código inválido, revísalo e intenta de nuevo'); return; }
+  S.settings.licenseCode = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  saveSettings();
+  closeModal();
+  toast('¡Activado! Ya puedes seguir vendiendo');
+  if (S.view === 'ajustes') renderSettings();
 }
 
 /* ---------- Ticket ---------- */
 function ticketHtml(o) {
-  const lines = o.items.map((i) =>
-    `<div class="t-row"><span>${i.qty}x ${escapeHtml(i.name)}</span><span>${money(i.price * i.qty)}</span></div>`
-  ).join('');
+  const lines = o.items.map((i) => `
+    <div class="t-row"><span>${i.qty}x ${escapeHtml(i.name)}</span><span>${money(i.price * i.qty)}</span></div>
+    ${i.notes ? `<div class="t-item-note">— ${escapeHtml(i.notes)}</div>` : ''}
+  `).join('');
   const cust = o.type === 'domicilio' && (o.customer.name || o.customer.address) ? `
     <hr>
     <div>Cliente: ${escapeHtml(o.customer.name || '-')}</div>
     ${o.customer.phone ? `<div>Tel: ${escapeHtml(o.customer.phone)}</div>` : ''}
-    ${o.customer.address ? `<div>Dir: ${escapeHtml(o.customer.address)}</div>` : ''}
+    ${o.customer.address ? `<div class="t-pre">Dir: ${escapeHtml(o.customer.address)}</div>` : ''}
   ` : '';
-  const notes = o.customer.notes ? `<div>Notas: ${escapeHtml(o.customer.notes)}</div>` : '';
+  const notes = o.customer.notes ? `<div class="t-pre">Notas: ${escapeHtml(o.customer.notes)}</div>` : '';
   const payLabel = o.payment === 'efectivo' ? 'Efectivo' : 'Transferencia/Tarjeta';
   const cashLines = o.payment === 'efectivo' && o.cashReceived ? `
     <div class="t-row"><span>Recibido</span><span>${money(o.cashReceived)}</span></div>
@@ -606,12 +919,31 @@ function printTicket(o) {
   }
 }
 
+// Mensaje corto avisando el avance del pedido (distinto del ticket completo).
+const STATUS_MESSAGES = {
+  preparacion: 'Tu pedido está en preparación.',
+  camino: 'Tu pedido va en camino.',
+  listo: 'Tu pedido está listo para recoger.',
+  entregado: 'Tu pedido fue entregado. ¡Gracias por tu compra!',
+};
+function whatsappStatusUpdate(o) {
+  const msg = STATUS_MESSAGES[o.status || 'preparacion'];
+  const text = encodeURIComponent(`*${S.settings.restaurantName || 'Restaurante'}*\n${msg}`);
+  const phone = (o.customer.phone || '').replace(/\D/g, '');
+  if (!phone) toast('Sin teléfono guardado: elige el contacto en WhatsApp');
+  const url = phone ? `https://wa.me/${phone}?text=${text}` : `https://wa.me/?text=${text}`;
+  window.open(url, '_blank');
+}
+
 function whatsappTicket(o) {
   const L = [];
   L.push(`*${S.settings.restaurantName || 'Restaurante'}*`);
-  L.push(`Folio #${o.folio} — ${o.type === 'domicilio' ? 'Pedido a domicilio' : 'Pedido para llevar'}`);
+  L.push(o.type === 'domicilio' ? 'Pedido a domicilio' : 'Pedido para llevar');
   L.push('');
-  o.items.forEach((i) => L.push(`${i.qty}x ${i.name} — ${money(i.price * i.qty)}`));
+  o.items.forEach((i) => {
+    L.push(`${i.qty}x ${i.name} — ${money(i.price * i.qty)}`);
+    if (i.notes) L.push(`   (${i.notes})`);
+  });
   L.push('');
   L.push(`Subtotal: ${money(o.subtotal)}`);
   if (o.discountAmount) L.push(`Descuento${o.discountType === 'percent' ? ` (${o.discountValue}%)` : ''}: -${money(o.discountAmount)}`);
@@ -626,6 +958,7 @@ function whatsappTicket(o) {
   if (o.customer.notes) L.push(`Notas: ${o.customer.notes}`);
   const text = encodeURIComponent(L.join('\n'));
   const phone = (o.customer.phone || '').replace(/\D/g, '');
+  if (!phone) toast('Sin teléfono guardado: elige el contacto en WhatsApp');
   const url = phone ? `https://wa.me/${phone}?text=${text}` : `https://wa.me/?text=${text}`;
   window.open(url, '_blank');
 }
@@ -643,7 +976,7 @@ const PERIODS = [
   { id: 'hoy', label: 'Hoy' },
   { id: 'semana', label: 'Semana' },
   { id: 'mes', label: 'Mes' },
-  { id: 'todo', label: 'Todo' },
+  { id: 'todo', label: 'Siempre' },
 ];
 function periodStart(period) {
   if (period === 'hoy') return startOfToday();
@@ -683,6 +1016,7 @@ function renderPedidos() {
     const st = STATUS[o.status || 'preparacion'];
     const next = nextStatus(o);
     const nextMeta = next ? STATUS[next] : null;
+    const prev = previousStatus(o);
     const itemsTxt = o.items.map((i) => `${i.qty}× ${escapeHtml(i.name)}`).join(', ');
     const dom = o.type === 'domicilio';
     return `
@@ -701,11 +1035,12 @@ function renderPedidos() {
           <span>${minsAgo(o.date)}</span>
         </div>
         <div class="pc-actions">
+          ${prev ? `<button class="icon-btn" data-revert="${o.id}" title="Regresar a: ${STATUS[prev].label}">${icon('undo')}</button>` : ''}
           ${nextMeta
             ? `<button class="btn btn-primary btn-block" data-advance="${o.id}" style="background:${nextMeta.color};border-color:${nextMeta.color}">Marcar: ${icon(nextMeta.icon,15)} ${nextMeta.label}</button>`
             : ''}
           <button class="icon-btn-label" data-order="${o.id}">${icon('receipt')}<span>Detalle</span></button>
-          ${dom && o.customer.phone ? `<button class="icon-btn-label" data-wapp="${o.id}">${icon('chat')}<span>Avisar</span></button>` : ''}
+          <button class="icon-btn-label" data-wapp="${o.id}">${icon('chat')}<span>Avisar</span></button>
         </div>
       </div>`;
   }).join('');
@@ -721,6 +1056,97 @@ function advanceStatus(id) {
   updateActiveBadge();
   renderPedidos();
   toast(n === 'entregado' ? 'Pedido entregado' : `Ahora: ${STATUS[n].label}`);
+}
+
+// Regresa el pedido al estado anterior, por si se avanzó por equivocación
+// (incluso desde "Entregado", para que vuelva a aparecer en Pedidos activos).
+function revertStatus(id) {
+  const o = S.orders.find((x) => x.id === id);
+  if (!o) return;
+  const p = previousStatus(o);
+  if (!p) return;
+  o.status = p;
+  saveOrders();
+  updateActiveBadge();
+  renderPedidos();
+  toast(`Regresado a: ${STATUS[p].label}`);
+}
+
+/* ---------- Gráfica de tendencia (línea/área) para ventas por día o por mes ----------
+   Un bar chart con muchos días en $0 se ve raro (puros palitos casi invisibles).
+   Para una tendencia en el tiempo, una línea/área se lee mucho mejor. */
+const TREND_W = 600, TREND_H = 160, TREND_PAD_TOP = 16, TREND_PAD_BOTTOM = 28, TREND_PAD_X = 4;
+function trendX(i, n) { return n <= 1 ? TREND_W / 2 : TREND_PAD_X + (i * (TREND_W - TREND_PAD_X * 2)) / (n - 1); }
+function trendY(v, maxVal) {
+  const chartH = TREND_H - TREND_PAD_TOP - TREND_PAD_BOTTOM;
+  return TREND_PAD_TOP + chartH - (v / maxVal) * chartH;
+}
+
+function buildTrendChart(points, title) {
+  const n = points.length;
+  const maxVal = Math.max(1, ...points.map((p) => p.value));
+  const baseline = TREND_H - TREND_PAD_BOTTOM;
+  const linePts = points.map((p, i) => `${trendX(i, n)},${trendY(p.value, maxVal)}`).join(' ');
+  const areaPts = `${trendX(0, n)},${baseline} ${linePts} ${trendX(n - 1, n)},${baseline}`;
+  const last = points[n - 1];
+
+  // Etiquetas del eje: si hay muchos puntos, solo mostramos algunas para no amontonarlas.
+  const step = n <= 8 ? 1 : Math.ceil(n / 6);
+  const labelsHtml = points.map((p, i) => {
+    if (i !== 0 && i !== n - 1 && i % step !== 0) return '';
+    return `<span class="trend-label" style="left:${(trendX(i, n) / TREND_W) * 100}%">${escapeHtml(p.label)}</span>`;
+  }).join('');
+
+  return `
+    <div class="chart-card">
+      <h3>${icon('trendingUp')} ${escapeHtml(title)}</h3>
+      <div class="trend-chart" id="trendChart">
+        <svg viewBox="0 0 ${TREND_W} ${TREND_H}" preserveAspectRatio="none" class="trend-svg">
+          <line x1="${TREND_PAD_X}" y1="${baseline}" x2="${TREND_W - TREND_PAD_X}" y2="${baseline}" class="trend-baseline"/>
+          <polygon points="${areaPts}" class="trend-area"/>
+          <polyline points="${linePts}" class="trend-line"/>
+          <circle cx="${trendX(n - 1, n)}" cy="${trendY(last.value, maxVal)}" r="4" class="trend-enddot"/>
+          <circle id="trendHoverDot" cx="${trendX(n - 1, n)}" cy="${trendY(last.value, maxVal)}" r="5" class="trend-hoverdot" opacity="0"/>
+        </svg>
+        <div class="trend-labels">${labelsHtml}</div>
+        <div class="trend-tooltip" id="trendTooltip" hidden></div>
+      </div>
+    </div>`;
+}
+
+// Se llama después de inyectar el HTML: engancha el tooltip al pasar el dedo/mouse.
+function attachTrendInteractivity(points) {
+  const wrap = $('#trendChart');
+  if (!wrap) return;
+  const svg = wrap.querySelector('.trend-svg');
+  const tooltip = $('#trendTooltip');
+  const hoverDot = $('#trendHoverDot');
+  const n = points.length;
+  const maxVal = Math.max(1, ...points.map((p) => p.value));
+
+  function showAt(idx) {
+    idx = Math.max(0, Math.min(n - 1, idx));
+    const p = points[idx];
+    hoverDot.setAttribute('cx', trendX(idx, n));
+    hoverDot.setAttribute('cy', trendY(p.value, maxVal));
+    hoverDot.setAttribute('opacity', '1');
+    tooltip.hidden = false;
+    tooltip.innerHTML = `<div class="tt-label">${escapeHtml(p.label)}</div><div class="tt-value">${money(p.value)}</div>`;
+    const pct = Math.min(92, Math.max(8, (trendX(idx, n) / TREND_W) * 100));
+    tooltip.style.left = pct + '%';
+  }
+  function hide() { hoverDot.setAttribute('opacity', '0'); tooltip.hidden = true; }
+  function handlePointer(clientX) {
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width) return;
+    const rel = (clientX - rect.left) / rect.width;
+    showAt(Math.round(rel * (n - 1)));
+  }
+  svg.addEventListener('mousemove', (e) => handlePointer(e.clientX));
+  svg.addEventListener('mouseleave', hide);
+  svg.addEventListener('touchstart', (e) => handlePointer(e.touches[0].clientX), { passive: true });
+  svg.addEventListener('touchmove', (e) => handlePointer(e.touches[0].clientX), { passive: true });
+  svg.addEventListener('touchend', hide);
 }
 
 function renderHistorial() {
@@ -751,32 +1177,39 @@ function renderHistorial() {
     </div>
   `;
 
-  // Gráfica de ventas por día (cuando el periodo abarca varios días)
+  // Gráfica de ventas por día (o por mes, si el periodo "Todo" abarca mucho tiempo)
   let salesChart = '';
+  let trendPoints = null;
   if (period !== 'hoy' && orders.length) {
-    const days = [];
-    const from = period === 'todo' ? (orders.reduce((m, o) => Math.min(m, o.date), Date.now())) : start;
-    for (let d = startOfToday(); d >= from; d -= 864e5) days.unshift(d);
-    const perDay = days.map((d) => ({
-      d,
-      total: orders.filter((o) => dayKey(o.date) === dayKey(d)).reduce((s, o) => s + o.total, 0),
-    }));
-    const maxDay = Math.max(1, ...perDay.map((x) => x.total));
-    salesChart = `
-      <div class="chart-card">
-        <h3>${icon('trendingUp')} Ventas por día</h3>
-        <div class="bar-chart">
-          ${perDay.map((x) => `
-            <div class="bar-row">
-              <span>${new Date(x.d).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric' })}</span>
-              <div class="bar-track"><div class="bar-fill" style="width:${(x.total / maxDay) * 100}%"></div></div>
-              <strong>${money(x.total)}</strong>
-            </div>`).join('')}
-        </div>
-      </div>`;
+    const from = period === 'todo' ? orders.reduce((m, o) => Math.min(m, o.date), Date.now()) : start;
+    const spanDays = Math.round((startOfToday() - from) / 864e5) + 1;
+
+    if (spanDays > 31) {
+      // Rango muy largo: agrupar por mes para que la gráfica no crezca sin límite
+      const byMonth = {};
+      orders.forEach((o) => {
+        const d = new Date(o.date);
+        const key = `${d.getFullYear()}-${d.getMonth()}`;
+        byMonth[key] = (byMonth[key] || 0) + o.total;
+      });
+      const monthKeys = Object.keys(byMonth).sort();
+      trendPoints = monthKeys.map((k) => {
+        const [y, m] = k.split('-').map(Number);
+        return { label: new Date(y, m, 1).toLocaleDateString('es-MX', { month: 'short', year: '2-digit' }), value: byMonth[k] };
+      });
+      salesChart = buildTrendChart(trendPoints, 'Ventas por mes');
+    } else {
+      const days = [];
+      for (let d = startOfToday(); d >= from; d -= 864e5) days.unshift(d);
+      trendPoints = days.map((d) => ({
+        label: new Date(d).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric' }),
+        value: orders.filter((o) => dayKey(o.date) === dayKey(d)).reduce((s, o) => s + o.total, 0),
+      }));
+      salesChart = buildTrendChart(trendPoints, 'Ventas por día');
+    }
   }
 
-  // Gráfica: productos más vendidos en el periodo
+  // Gráfica: productos más vendidos en el periodo (etiqueta ancha para no truncar el nombre)
   const counts = {};
   orders.forEach((o) => o.items.forEach((i) => { counts[i.name] = (counts[i.name] || 0) + i.qty; }));
   const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5);
@@ -784,12 +1217,15 @@ function renderHistorial() {
   const topChart = top.length ? `
     <div class="chart-card">
       <h3>${icon('award')} Más vendidos</h3>
-      <div class="bar-chart">
-        ${top.map(([name, c]) => `
-          <div class="bar-row">
-            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(name)}</span>
-            <div class="bar-track"><div class="bar-fill" style="width:${(c / maxCount) * 100}%"></div></div>
-            <strong>${c}</strong>
+      <div class="dot-plot">
+        ${top.map(([name, c], i) => `
+          <div class="dot-row">
+            <span class="dot-label">${i + 1}. ${escapeHtml(name)}</span>
+            <div class="dot-track">
+              <div class="dot-stem" style="width:${(c / maxCount) * 100}%"></div>
+              <div class="dot-marker" style="left:${(c / maxCount) * 100}%"></div>
+            </div>
+            <strong class="dot-value">${c}</strong>
           </div>`).join('')}
       </div>
     </div>` : '';
@@ -823,6 +1259,7 @@ function renderHistorial() {
     });
   }
   $('#histList').innerHTML = salesChart + topChart + listHtml;
+  if (trendPoints) attachTrendInteractivity(trendPoints);
 }
 
 function openOrderDetail(id) {
@@ -831,11 +1268,15 @@ function openOrderDetail(id) {
   const st = STATUS[o.status || 'entregado'];
   const next = nextStatus(o);
   const nextMeta = next ? STATUS[next] : null;
+  const prev = previousStatus(o);
   const statusBar = `
     <div class="detail-status">
       <span>Estado:</span>
       <span class="status-pill" style="background:${st.color}1a;color:${st.color}">${icon(st.icon,15)} ${st.label}</span>
-      ${nextMeta ? `<button class="btn btn-primary" data-advance="${o.id}" style="background:${nextMeta.color};border-color:${nextMeta.color};margin-left:auto">→ ${nextMeta.label}</button>` : ''}
+      <div style="margin-left:auto;display:flex;gap:8px">
+        ${prev ? `<button class="icon-btn" data-revert="${o.id}" title="Regresar a: ${STATUS[prev].label}">${icon('undo')}</button>` : ''}
+        ${nextMeta ? `<button class="btn btn-primary" data-advance="${o.id}" style="background:${nextMeta.color};border-color:${nextMeta.color}">→ ${nextMeta.label}</button>` : ''}
+      </div>
     </div>`;
   openModal(`
     <div class="modal-head">
@@ -858,6 +1299,31 @@ function openOrderDetail(id) {
 /* ============================================================
    VISTA: MENÚ (administrar productos)
    ============================================================ */
+function openCategoryColorPicker(cat) {
+  const current = catColor(cat);
+  openModal(`
+    <div class="modal-head">
+      <h2>${icon('palette')} Color de "${escapeHtml(cat)}"</h2>
+      <button class="modal-close" data-close>${icon('close', 16)}</button>
+    </div>
+    <div class="modal-body">
+      <div class="color-presets">
+        ${COLOR_PRESETS.map((c) => `<button type="button" class="swatch ${c.toLowerCase() === current.toLowerCase() ? 'active' : ''}" data-catcolor="${c}" style="background:${c}"></button>`).join('')}
+        <label class="swatch swatch-custom">${icon('palette', 16)}<input type="color" id="catColorInput" value="${current}"></label>
+      </div>
+    </div>
+  `);
+  modalEl.dataset.editingCat = cat;
+  $('#catColorInput').addEventListener('change', (e) => setCategoryColor(cat, e.target.value));
+}
+function setCategoryColor(cat, color) {
+  S.settings.categoryColors = S.settings.categoryColors || {};
+  S.settings.categoryColors[cat] = color;
+  saveSettings();
+  closeModal();
+  renderMenu();
+}
+
 function renderMenu() {
   const wrap = $('#menuAdmin');
   if (S.products.length === 0) {
@@ -867,10 +1333,13 @@ function renderMenu() {
   const cats = [...new Set(S.products.map((p) => p.category))];
   wrap.innerHTML = cats.map((cat) => `
     <div>
-      <h3 class="menu-cat-title">${escapeHtml(cat)}</h3>
+      <h3 class="menu-cat-title">
+        <button type="button" class="cat-color-dot" data-editcatcolor="${escapeHtml(cat)}" style="background:${catColor(cat)}" title="Cambiar color de la categoría"></button>
+        <span>${escapeHtml(cat)}</span>
+      </h3>
       ${S.products.filter((p) => p.category === cat).map((p) => `
         <div class="menu-row">
-          <div class="m-thumb" style="${p.image ? `background-image:url('${p.image}')` : ''}">${p.image ? '' : icon('utensils',20)}</div>
+          <div class="m-thumb" style="${p.image ? `background-image:url('${escapeHtml(p.image)}')` : ''}">${p.image ? '' : icon('utensils',20)}</div>
           <div class="m-info">
             <div class="m-name ${p.active ? '' : 'off'}">${escapeHtml(p.name)}</div>
             <div class="m-price">${money(p.price)}</div>
@@ -898,7 +1367,7 @@ function openProductForm(id) {
       <div class="field">
         <label>Imagen (opcional)</label>
         <div class="img-picker">
-          <div class="img-preview" id="imgPreview" style="${productImage ? `background-image:url('${productImage}')` : ''}">${productImage ? '' : icon('image',24)}</div>
+          <div class="img-preview" id="imgPreview" style="${productImage ? `background-image:url('${escapeHtml(productImage)}')` : ''}">${productImage ? '' : icon('image',24)}</div>
           <div class="img-actions">
             <button type="button" class="btn" id="pickImg">${productImage ? 'Cambiar' : 'Elegir imagen'}</button>
             <button type="button" class="btn btn-ghost" id="removeImg" ${productImage ? '' : 'hidden'}>Quitar</button>
@@ -907,7 +1376,7 @@ function openProductForm(id) {
         <input type="file" id="pImgFile" accept="image/*" hidden>
       </div>
       <div class="field"><label>Nombre</label><input id="pName" placeholder="Ej. Hamburguesa" value="${p ? escapeHtml(p.name) : ''}"></div>
-      <div class="field"><label>Precio</label><input id="pPrice" type="number" inputmode="decimal" min="0" placeholder="0" value="${p ? p.price : ''}"></div>
+      <div class="field"><label>Precio</label><input id="pPrice" type="text" inputmode="decimal" placeholder="0" value="${p ? p.price : ''}"></div>
       <div class="field"><label>Categoría</label>
         <select id="pCat">${catOptions}<option value="__new__">+ Nueva categoría…</option></select>
       </div>
@@ -938,7 +1407,7 @@ function openProductForm(id) {
 function saveProduct() {
   const id = modalEl.dataset.editId;
   const name = $('#pName').value.trim();
-  const price = parseFloat($('#pPrice').value);
+  const price = parseFloat($('#pPrice').value.trim().replace(',', '.'));
   let cat = $('#pCat').value;
   if (cat === '__new__') {
     cat = $('#pNewCat').value.trim();
@@ -963,13 +1432,187 @@ function saveProduct() {
 /* ============================================================
    VISTA: AJUSTES
    ============================================================ */
+/* ---------- Clientes guardados ---------- */
+function openCustomersList() {
+  const rows = S.customers.slice().sort((a, b) => b.updatedAt - a.updatedAt);
+  openModal(`
+    <div class="modal-head">
+      <h2>${icon('users')} Clientes guardados</h2>
+      <button class="modal-close" data-close>${icon('close', 16)}</button>
+    </div>
+    <div class="modal-body">
+      <button class="btn btn-primary btn-block" id="addCustomerBtn" style="margin-bottom:14px">${icon('plus')} Agregar cliente</button>
+      ${rows.length ? rows.map((c) => `
+        <div class="menu-row">
+          <div class="m-info">
+            <div class="m-name">${escapeHtml(c.name || 'Sin nombre')}</div>
+            <div class="field-hint">${escapeHtml(c.phone)}${c.address ? ' · ' + escapeHtml(c.address) : ''}${c.company ? ' · ' + escapeHtml(c.company) : ''}</div>
+          </div>
+          <button class="icon-btn" data-editcustomer="${c.id}" title="Editar">${icon('edit')}</button>
+          <button class="icon-btn" data-deletecustomer="${c.id}" title="Borrar">${icon('trash')}</button>
+        </div>`).join('')
+        : `<div class="empty-state"><span class="emoji">${icon('users', 42)}</span>Aún no tienes clientes guardados.<br>Se guardan solos al vender, o agrégalos aquí.</div>`}
+    </div>
+  `);
+}
+
+// id === null crea un cliente nuevo; con id edita uno existente.
+function openCustomerEditForm(id) {
+  const c = id ? S.customers.find((x) => x.id === id) : null;
+  if (id && !c) return;
+  openModal(`
+    <div class="modal-head">
+      <h2>${icon('edit')} ${c ? 'Editar cliente' : 'Nuevo cliente'}</h2>
+      <button class="modal-close" data-close>${icon('close', 16)}</button>
+    </div>
+    <div class="modal-body">
+      <div class="field"><label>Nombre</label><input id="custName" placeholder="Ej. Juan Pérez" value="${escapeHtml(c ? c.name : '')}"></div>
+      <div class="field"><label>Teléfono</label><input id="custPhone" inputmode="tel" placeholder="10 dígitos" value="${escapeHtml(c ? c.phone : '')}"></div>
+      <div class="field"><label>Dirección</label><textarea id="custAddress" rows="2" placeholder="Calle, número, colonia, referencias">${escapeHtml(c ? c.address : '')}</textarea></div>
+      <div class="field autocomplete-wrap">
+        <label>Empresa (opcional)</label>
+        <input id="custCompany" placeholder="Ej. Constructora ABC" value="${escapeHtml(c ? c.company || '' : '')}" autocomplete="off">
+        <div class="autocomplete-list" id="companySuggestions" hidden></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close>Cancelar</button>
+      <button class="btn btn-primary btn-block" id="saveCustomerEdit">Guardar</button>
+    </div>
+  `);
+  modalEl.dataset.customerId = id || '';
+}
+
+function saveCustomerEdit() {
+  const id = modalEl.dataset.customerId;
+  const newPhone = customerKey($('#custPhone').value);
+  if (!newPhone) { toast('Teléfono inválido'); return; }
+  const dup = S.customers.find((x) => x.phone === newPhone && x.id !== id);
+  if (dup) { toast('Ya existe un cliente con ese teléfono'); return; }
+
+  const name = $('#custName').value.trim();
+  const address = $('#custAddress').value.trim();
+  const company = $('#custCompany').value.trim();
+
+  let c = id ? S.customers.find((x) => x.id === id) : null;
+  if (c) {
+    c.name = name; c.phone = newPhone; c.address = address; c.company = company;
+    c.updatedAt = Date.now();
+  } else {
+    c = { id: uid(), name, phone: newPhone, address, company, notes: '', createdAt: Date.now(), updatedAt: Date.now() };
+    S.customers.push(c);
+  }
+  if (company) upsertCompany({ name: company, address });
+  if (!saveCustomers()) return;
+  toast(id ? 'Cliente actualizado' : 'Cliente agregado');
+  openCustomersList();
+}
+
+/* ---------- Empresas guardadas ---------- */
+function openCompaniesList() {
+  const rows = S.companies.slice().sort((a, b) => b.updatedAt - a.updatedAt);
+  openModal(`
+    <div class="modal-head">
+      <h2>${icon('building')} Empresas guardadas</h2>
+      <button class="modal-close" data-close>${icon('close', 16)}</button>
+    </div>
+    <div class="modal-body">
+      <p class="field-hint" style="margin-top:0">Varios clientes pueden compartir la dirección de una misma empresa.</p>
+      <button class="btn btn-primary btn-block" id="addCompanyBtn" style="margin-bottom:14px">${icon('plus')} Agregar empresa</button>
+      ${rows.length ? rows.map((co) => `
+        <div class="menu-row">
+          <div class="m-info">
+            <div class="m-name">${escapeHtml(co.name)}</div>
+            <div class="field-hint">${co.address ? escapeHtml(co.address) : 'Sin dirección'}${co.phone ? ' · ' + escapeHtml(co.phone) : ''}</div>
+          </div>
+          <button class="icon-btn" data-editcompany="${co.id}" title="Editar">${icon('edit')}</button>
+          <button class="icon-btn" data-deletecompany="${co.id}" title="Borrar">${icon('trash')}</button>
+        </div>`).join('')
+        : `<div class="empty-state"><span class="emoji">${icon('building', 42)}</span>Aún no tienes empresas guardadas.</div>`}
+    </div>
+  `);
+}
+
+function openCompanyEditForm(id) {
+  const co = id ? S.companies.find((x) => x.id === id) : null;
+  if (id && !co) return;
+  openModal(`
+    <div class="modal-head">
+      <h2>${icon('edit')} ${co ? 'Editar empresa' : 'Nueva empresa'}</h2>
+      <button class="modal-close" data-close>${icon('close', 16)}</button>
+    </div>
+    <div class="modal-body">
+      <div class="field"><label>Nombre de la empresa</label><input id="coName" placeholder="Ej. Constructora ABC" value="${escapeHtml(co ? co.name : '')}"></div>
+      <div class="field"><label>Dirección</label><textarea id="coAddress" rows="2" placeholder="Calle, número, colonia, referencias">${escapeHtml(co ? co.address : '')}</textarea></div>
+      <div class="field"><label>Teléfono (opcional)</label><input id="coPhone" inputmode="tel" value="${escapeHtml(co ? co.phone || '' : '')}"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close>Cancelar</button>
+      <button class="btn btn-primary btn-block" id="saveCompanyEdit">Guardar</button>
+    </div>
+  `);
+  modalEl.dataset.companyId = id || '';
+}
+
+function saveCompanyEdit() {
+  const id = modalEl.dataset.companyId;
+  const name = $('#coName').value.trim();
+  if (!name) { toast('Escribe el nombre de la empresa'); return; }
+  const dup = S.companies.find((x) => companyKey(x.name) === companyKey(name) && x.id !== id);
+  if (dup) { toast('Ya existe una empresa con ese nombre'); return; }
+
+  const address = $('#coAddress').value.trim();
+  const phone = customerKey($('#coPhone').value);
+
+  let co = id ? S.companies.find((x) => x.id === id) : null;
+  if (co) {
+    co.name = name; co.address = address; co.phone = phone;
+    co.updatedAt = Date.now();
+  } else {
+    co = { id: uid(), name, address, phone, createdAt: Date.now(), updatedAt: Date.now() };
+    S.companies.push(co);
+  }
+  if (!saveCompanies()) return;
+  toast(id ? 'Empresa actualizada' : 'Empresa agregada');
+  openCompaniesList();
+}
+
 function renderSettings() {
   const s = S.settings;
+  const activated = isActivated();
+  const waLink = SELLER_WHATSAPP
+    ? `https://wa.me/${SELLER_WHATSAPP}?text=${encodeURIComponent('Hola, quiero activar mi Punto de Venta')}`
+    : '';
+  const licenseSection = !LICENSE_ENFORCED ? '' : `
+    <div class="license-box ${activated ? 'ok' : ''}">
+      <div class="license-status">
+        ${activated
+          ? `${icon('checkCircle')} Licencia activada`
+          : `${icon('tag')} Prueba gratis: ${trialRemaining()} de ${TRIAL_LIMIT} ventas restantes`}
+      </div>
+      ${activated ? '' : `
+        <div class="field" style="margin-top:10px">
+          <label>Código de activación</label>
+          <input id="licenseInput" placeholder="XXXX-XXXX-XXXX" value="${escapeHtml(s.licenseCode || '')}" style="text-transform:uppercase">
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary" id="activateLicenseBtn">Activar</button>
+          ${waLink ? `<a class="btn" style="text-decoration:none;display:flex;align-items:center;gap:8px" href="${waLink}" target="_blank">${icon('chat')} Comprar por WhatsApp</a>` : ''}
+        </div>`}
+    </div>`;
   $('#settingsForm').innerHTML = `
+    <div class="quick-section">
+      <h3 class="menu-cat-title">Clientes y empresas</h3>
+      <div class="quick-buttons">
+        <button class="btn" id="openCustomers">${icon('users')} Clientes (${S.customers.length})</button>
+        <button class="btn" id="openCompanies">${icon('building')} Empresas (${S.companies.length})</button>
+      </div>
+    </div>
+    ${licenseSection}
     <div class="field">
       <label>Logo del negocio (opcional)</label>
       <div class="img-picker">
-        <div class="img-preview" id="logoPreview" style="${s.logo ? `background-image:url('${s.logo}')` : ''}">${s.logo ? '' : icon('utensils',24)}</div>
+        <div class="img-preview" id="logoPreview" style="${s.logo ? `background-image:url('${escapeHtml(s.logo)}')` : ''}">${s.logo ? '' : icon('utensils',24)}</div>
         <div class="img-actions">
           <button type="button" class="btn" id="pickLogo">${s.logo ? 'Cambiar' : 'Elegir logo'}</button>
           <button type="button" class="btn btn-ghost" id="removeLogo" ${s.logo ? '' : 'hidden'}>Quitar</button>
@@ -981,7 +1624,7 @@ function renderSettings() {
     <div class="field"><label>Teléfono</label><input id="setPhone" type="tel" value="${escapeHtml(s.phone)}"></div>
     <div class="field"><label>Dirección</label><input id="setAddress" value="${escapeHtml(s.address)}"></div>
     <div class="field"><label>Símbolo de moneda</label><input id="setCurrency" maxlength="3" value="${escapeHtml(s.currency)}" style="max-width:100px"></div>
-    <div class="field"><label>Costo de envío por defecto</label><input id="setFee" type="number" inputmode="decimal" min="0" value="${s.defaultDeliveryFee}"><span class="field-hint">Se puede cambiar en cada pedido a domicilio.</span></div>
+    <div class="field"><label>Costo de envío por defecto</label><input id="setFee" type="text" inputmode="decimal" value="${s.defaultDeliveryFee}"><span class="field-hint">Se puede cambiar en cada pedido a domicilio.</span></div>
     <div class="field">
       <label>Color del negocio</label>
       <div class="color-presets">
@@ -1012,7 +1655,7 @@ function saveSettingsForm() {
   S.settings.phone = $('#setPhone').value.trim();
   S.settings.address = $('#setAddress').value.trim();
   S.settings.currency = $('#setCurrency').value.trim() || '$';
-  S.settings.defaultDeliveryFee = Number($('#setFee').value) || 0;
+  S.settings.defaultDeliveryFee = parseNum($('#setFee').value);
   if ($('#setColor')) S.settings.primaryColor = $('#setColor').value;
   saveSettings();
   applyTheme();
@@ -1031,20 +1674,45 @@ function exportData() {
   URL.revokeObjectURL(a.href);
 }
 
+// Un respaldo es un archivo externo: no confiar en su contenido a ciegas.
+// Solo se aceptan imágenes en formato data-URL y colores en formato hex;
+// cualquier otra cosa se descarta en vez de guardarse tal cual.
+const DATA_IMAGE_RE = /^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{3,8}$/;
+function sanitizeImportedData(data) {
+  if (!Array.isArray(data.products) || !Array.isArray(data.orders)) {
+    throw new Error('Formato inválido');
+  }
+  data.products.forEach((p) => {
+    if (p && typeof p.image === 'string' && p.image && !DATA_IMAGE_RE.test(p.image)) p.image = '';
+  });
+  if (data.settings && typeof data.settings === 'object') {
+    if (typeof data.settings.logo === 'string' && data.settings.logo && !DATA_IMAGE_RE.test(data.settings.logo)) {
+      data.settings.logo = '';
+    }
+    if (data.settings.categoryColors && typeof data.settings.categoryColors === 'object') {
+      Object.keys(data.settings.categoryColors).forEach((k) => {
+        if (!HEX_COLOR_RE.test(data.settings.categoryColors[k])) delete data.settings.categoryColors[k];
+      });
+    }
+  }
+  return data;
+}
+
 function importData(file) {
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      const data = JSON.parse(reader.result);
-      if (!data.products || !data.orders) throw new Error('Formato inválido');
-      if (!confirm('Esto reemplazará TODOS los datos actuales. ¿Continuar?')) return;
-      S.settings = data.settings || S.settings;
-      S.products = data.products;
-      S.orders = data.orders;
-      saveSettings(); saveProducts(); saveOrders();
-      updateDayTotal();
-      renderSettings();
-      toast('Respaldo importado');
+      const data = sanitizeImportedData(JSON.parse(reader.result));
+      confirmDialog('Esto reemplazará TODOS los datos actuales. ¿Continuar?', () => {
+        S.settings = data.settings || S.settings;
+        S.products = data.products;
+        S.orders = data.orders;
+        saveSettings(); saveProducts(); saveOrders();
+        updateDayTotal();
+        renderSettings();
+        toast('Respaldo importado');
+      }, { confirmLabel: 'Reemplazar todo', danger: true });
     } catch (e) { toast('Archivo no válido'); }
   };
   reader.readAsText(file);
@@ -1151,7 +1819,7 @@ function switchView(view) {
    EVENTOS (delegación desde el documento)
    ============================================================ */
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-view],[data-add],[data-cat],[data-close],[data-qty],[data-order],[data-toggle],[data-edit],[data-delete],[data-type],[data-pay],[data-disctype],[data-clearcart],[data-closesheet],[data-color],[data-period],[data-advance],[data-wapp],[data-ob],[data-obcolor],[data-obsample]');
+  const t = e.target.closest('[data-view],[data-add],[data-cat],[data-close],[data-qty],[data-removeitem],[data-itemnote],[data-order],[data-toggle],[data-edit],[data-delete],[data-type],[data-pay],[data-disctype],[data-clearcart],[data-closesheet],[data-color],[data-period],[data-advance],[data-revert],[data-wapp],[data-ob],[data-obcolor],[data-obsample],[data-editcustomer],[data-deletecustomer],[data-editcatcolor],[data-catcolor],[data-editcompany],[data-deletecompany],[data-pickcustomer],[data-pickcompany],[data-openentity]');
 
   // Navegación
   const nav = e.target.closest('.nav-btn');
@@ -1160,7 +1828,12 @@ document.addEventListener('click', (e) => {
   if (!t) return;
 
   // Cerrar modal
-  if (t.hasAttribute('data-close')) { closeModal(); if (S.view === 'vender') renderPOS(); return; }
+  if (t.hasAttribute('data-close')) {
+    if ($('#checkoutTotals')) captureCheckoutInputs();
+    closeModal();
+    if (S.view === 'vender') renderPOS();
+    return;
+  }
 
   // POS: categoría
   if (t.dataset.cat) { S.activeCat = t.dataset.cat; renderPOS(); return; }
@@ -1170,6 +1843,10 @@ document.addEventListener('click', (e) => {
 
   // Pedido: cambiar cantidad
   if (t.dataset.qty) { changeQty(t.dataset.qty, Number(t.dataset.delta)); return; }
+
+  // Pedido: quitar producto directamente / agregar-editar especificación
+  if (t.dataset.removeitem) { S.cart = S.cart.filter((i) => i.productId !== t.dataset.removeitem); renderPOS(); return; }
+  if (t.dataset.itemnote) { openItemNoteForm(t.dataset.itemnote); return; }
 
   // Pedido: tipo (domicilio / para llevar)
   if (t.dataset.type) {
@@ -1207,8 +1884,15 @@ document.addEventListener('click', (e) => {
     return;
   }
 
+  if (t.dataset.revert) {
+    const openId = !modalBackdrop.hidden ? modalEl.dataset.orderId : null;
+    revertStatus(t.dataset.revert);
+    if (openId) { closeModal(); if (S.view === 'historial') renderHistorial(); if (S.view === 'pedidos') renderPedidos(); }
+    return;
+  }
+
   // Pedidos: WhatsApp al cliente
-  if (t.dataset.wapp) { const o = S.orders.find((x) => x.id === t.dataset.wapp); if (o) whatsappTicket(o); return; }
+  if (t.dataset.wapp) { const o = S.orders.find((x) => x.id === t.dataset.wapp); if (o) whatsappStatusUpdate(o); return; }
 
   // Bienvenida: elegir color
   if (t.dataset.obcolor) { obData.color = t.dataset.obcolor; applyColorValue(obData.color); renderOnboarding(); return; }
@@ -1230,10 +1914,55 @@ document.addEventListener('click', (e) => {
   // Menú: acciones
   if (t.dataset.toggle) { const p = S.products.find((x) => x.id === t.dataset.toggle); p.active = !p.active; saveProducts(); renderMenu(); return; }
   if (t.dataset.edit) { openProductForm(t.dataset.edit); return; }
+
+  // Clientes: editar / borrar
+  if (t.dataset.editcustomer) { openCustomerEditForm(t.dataset.editcustomer); return; }
+  if (t.dataset.deletecustomer) {
+    const cid = t.dataset.deletecustomer;
+    confirmDialog('¿Borrar este cliente guardado?', () => {
+      S.customers = S.customers.filter((x) => x.id !== cid);
+      saveCustomers();
+      openCustomersList();
+    }, { confirmLabel: 'Borrar', danger: true });
+    return;
+  }
+
+  // Categorías: cambiar color
+  if (t.dataset.editcatcolor) { openCategoryColorPicker(t.dataset.editcatcolor); return; }
+  if (t.dataset.catcolor) { setCategoryColor(modalEl.dataset.editingCat, t.dataset.catcolor); return; }
+
+  // Empresas: editar / borrar
+  if (t.dataset.editcompany) { openCompanyEditForm(t.dataset.editcompany); return; }
+  if (t.dataset.deletecompany) {
+    const coid = t.dataset.deletecompany;
+    confirmDialog('¿Borrar esta empresa guardada?', () => {
+      S.companies = S.companies.filter((x) => x.id !== coid);
+      saveCompanies();
+      openCompaniesList();
+    }, { confirmLabel: 'Borrar', danger: true });
+    return;
+  }
+
+  // Autocompletado: elegir un cliente/empresa de la lista de sugerencias
+  if (t.dataset.pickcustomer) {
+    const c = S.customers.find((x) => x.id === t.dataset.pickcustomer);
+    if (c) pickCustomerSuggestion(c);
+    return;
+  }
+  if (t.dataset.pickcompany) {
+    const co = S.companies.find((x) => x.id === t.dataset.pickcompany);
+    if (co) pickCompanySuggestion(co);
+    return;
+  }
+  // Acceso directo a Clientes/Empresas desde el formulario de cobro
+  if (t.dataset.openentity === 'customers') { openCustomersList(); return; }
+  if (t.dataset.openentity === 'companies') { openCompaniesList(); return; }
+
   if (t.dataset.delete) {
-    if (confirm('¿Borrar este producto? (No afecta ventas ya registradas)')) {
-      S.products = S.products.filter((x) => x.id !== t.dataset.delete); saveProducts(); renderMenu();
-    }
+    const pid = t.dataset.delete;
+    confirmDialog('¿Borrar este producto? (No afecta ventas ya registradas)', () => {
+      S.products = S.products.filter((x) => x.id !== pid); saveProducts(); renderMenu();
+    }, { confirmLabel: 'Borrar', danger: true });
     return;
   }
 });
@@ -1245,19 +1974,27 @@ document.addEventListener('click', (e) => {
   switch (id) {
     case 'cartFab': openSheet(); break;
     case 'toCheckout': closeSheet(); openCheckout(); break;
-    case 'backToCart': closeModal(); break;
+    case 'backToCart': captureCheckoutInputs(); closeModal(); renderPOS(); break;
     case 'confirmSale': confirmSale(); break;
     case 'printTicket': printTicket(order()); break;
     case 'waTicket': whatsappTicket(order()); break;
-    case 'deleteOrder':
-      if (confirm('¿Borrar esta venta del historial?')) {
-        S.orders = S.orders.filter((o) => o.id !== modalEl.dataset.orderId);
-        saveOrders(); closeModal(); updateDayTotal(); updateActiveBadge();
+    case 'deleteOrder': {
+      const orderId = modalEl.dataset.orderId;
+      confirmDialog('¿Borrar esta venta del historial?', () => {
+        S.orders = S.orders.filter((o) => o.id !== orderId);
+        saveOrders(); updateDayTotal(); updateActiveBadge();
         if (S.view === 'pedidos') renderPedidos(); else renderHistorial();
-      }
+      }, { confirmLabel: 'Borrar', danger: true });
       break;
+    }
     case 'pickLogo': $('#logoFile').click(); break;
     case 'removeLogo': S.settings.logo = ''; saveSettings(); applyBranding(); renderSettings(); break;
+    case 'openCustomers': openCustomersList(); break;
+    case 'addCustomerBtn': openCustomerEditForm(null); break;
+    case 'saveCustomerEdit': saveCustomerEdit(); break;
+    case 'openCompanies': openCompaniesList(); break;
+    case 'addCompanyBtn': openCompanyEditForm(null); break;
+    case 'saveCompanyEdit': saveCompanyEdit(); break;
     case 'restartOnboarding':
       obStep = 0;
       obData = { name: S.settings.restaurantName === 'Mi Restaurante' ? '' : S.settings.restaurantName, color: S.settings.primaryColor || '#e11d48', sample: S.products.length > 0 };
@@ -1274,12 +2011,21 @@ document.addEventListener('click', (e) => {
     }
     case 'saveProduct': saveProduct(); break;
     case 'saveSettings': saveSettingsForm(); break;
+    case 'saveItemNote': saveItemNote(); break;
+    case 'activateLicenseBtn': activateLicense(); break;
+    case 'confirmDialogBtn': {
+      const cb = pendingConfirmCallback;
+      pendingConfirmCallback = null;
+      closeModal();
+      if (cb) cb();
+      break;
+    }
     case 'exportData': exportData(); break;
     case 'importData': $('#importFile').click(); break;
     case 'clearData':
-      if (confirm('¿Borrar TODAS las ventas? Esto no se puede deshacer.')) {
+      confirmDialog('¿Borrar TODAS las ventas? Esto no se puede deshacer.', () => {
         S.orders = []; saveOrders(); updateDayTotal(); updateActiveBadge(); toast('Ventas borradas');
-      }
+      }, { confirmLabel: 'Borrar todo', danger: true });
       break;
   }
 });
@@ -1312,6 +2058,11 @@ document.addEventListener('input', (e) => {
     captureCheckoutInputs();
     updateCheckoutTotals();
   }
+  if (e.target.id === 'cPhone' || e.target.id === 'setPhone' || e.target.id === 'custPhone') {
+    filterDigitsInput(e.target);
+  }
+  if (e.target.id === 'cPhone') renderPhoneSuggestions(e.target.value);
+  if (e.target.id === 'cCompany' || e.target.id === 'custCompany') renderCompanySuggestions(e.target.value);
   if (e.target.id === 'importFile') {
     if (e.target.files && e.target.files[0]) importData(e.target.files[0]);
   }

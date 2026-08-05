@@ -414,6 +414,13 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   color: var(--text-muted);
   font-weight: 700;
   margin: 0 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cat-color-dot {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 1px solid var(--border); padding: 0; cursor: pointer;
 }
 .menu-row {
   display: flex;
@@ -497,8 +504,47 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .chart-card h3 { margin: 0 0 14px; font-size: .95rem; display: flex; align-items: center; gap: 8px; }
 .bar-chart { display: flex; flex-direction: column; gap: 10px; }
 .bar-row { display: grid; grid-template-columns: 70px 1fr auto; align-items: center; gap: 10px; font-size: .85rem; }
-.bar-track { background: var(--surface-2); border-radius: 999px; height: 22px; overflow: hidden; }
-.bar-fill { height: 100%; background: linear-gradient(90deg, var(--primary), var(--primary-dark)); border-radius: 999px; min-width: 4px; transition: width .4s ease; }
+.bar-track { background: var(--surface-2); border-radius: 6px; height: 20px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--primary); border-radius: 0 4px 4px 0; min-width: 4px; transition: width .4s ease; }
+
+/* Gráfica de línea/área (tendencia en el tiempo) */
+.trend-chart { position: relative; }
+.trend-svg { width: 100%; height: 140px; display: block; overflow: visible; touch-action: pan-y; cursor: crosshair; }
+.trend-baseline { stroke: var(--border); stroke-width: 1; }
+.trend-area { fill: var(--primary); fill-opacity: .1; stroke: none; }
+.trend-line { fill: none; stroke: var(--primary); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.trend-enddot { fill: var(--primary); stroke: var(--surface); stroke-width: 2; }
+.trend-hoverdot { fill: var(--primary); stroke: var(--surface); stroke-width: 2; transition: opacity .1s; }
+.trend-labels { position: relative; height: 16px; margin-top: 6px; }
+.trend-label {
+  position: absolute; transform: translateX(-50%);
+  font-size: .72rem; color: var(--text-muted); white-space: nowrap;
+}
+.trend-tooltip {
+  position: absolute; top: 0; transform: translate(-50%, -100%);
+  background: var(--text); color: #fff;
+  padding: 6px 10px; border-radius: 8px;
+  white-space: nowrap; pointer-events: none; box-shadow: var(--shadow); z-index: 5;
+}
+.trend-tooltip .tt-label { font-size: .68rem; font-weight: 600; opacity: .75; }
+.trend-tooltip .tt-value { font-size: .85rem; font-weight: 700; }
+
+/* "Más vendidos": dot plot (lollipop) — cada fila es independiente, sin
+   línea que conecte un producto con otro (no son una secuencia). */
+.dot-plot { display: flex; flex-direction: column; gap: 18px; }
+.dot-row { display: flex; align-items: center; gap: 10px; }
+.dot-label {
+  flex: 0 0 auto; max-width: 42%; font-size: .85rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dot-track { position: relative; flex: 1; height: 10px; background: var(--border); border-radius: 999px; }
+.dot-stem { position: absolute; top: 0; left: 0; height: 100%; background: var(--primary); opacity: .35; border-radius: 999px; }
+.dot-marker {
+  position: absolute; top: 50%; width: 12px; height: 12px;
+  background: var(--primary); border: 2px solid var(--surface); border-radius: 50%;
+  transform: translate(-50%, -50%); box-shadow: var(--shadow-sm);
+}
+.dot-value { flex: 0 0 auto; min-width: 20px; text-align: right; font-weight: 700; font-size: .9rem; }
 
 .hist-day-title {
   font-size: .8rem; font-weight: 700; color: var(--text-muted);
@@ -533,6 +579,14 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 
 /* ---------- Ajustes ---------- */
 .settings-form { display: flex; flex-direction: column; gap: 16px; max-width: 520px; }
+
+.license-box {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px; background: var(--surface-2);
+}
+.license-box.ok { background: var(--success-soft); border-color: transparent; }
+.license-status { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: .92rem; }
+.license-box.ok .license-status { color: var(--success); }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label { font-size: .82rem; font-weight: 600; color: var(--text-muted); }
 .field input, .field select, .field textarea {
@@ -547,7 +601,34 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft);
 }
 .field-hint { font-size: .78rem; color: var(--text-muted); }
+.link-btn {
+  border: none; background: none; padding: 0; margin: 0;
+  color: var(--primary); font-weight: 700; font-size: .78rem;
+  text-decoration: underline; cursor: pointer;
+}
+
+/* Autocompletado propio (reemplaza el <datalist> nativo, que no se puede personalizar) */
+.autocomplete-wrap { position: relative; }
+.autocomplete-list {
+  position: absolute; left: 0; right: 0; top: 100%; z-index: 30;
+  margin-top: 4px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg); max-height: 220px; overflow-y: auto;
+}
+.autocomplete-item { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--border); }
+.autocomplete-item:last-child { border-bottom: none; }
+.autocomplete-item:active { background: var(--surface-2); }
+.autocomplete-item .ac-name { font-weight: 600; font-size: .88rem; }
+.autocomplete-item .ac-sub { font-size: .78rem; color: var(--text-muted); }
 .settings-danger { margin-top: 12px; padding-top: 16px; border-top: 1px solid var(--border); }
+
+.quick-section {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 16px;
+}
+.quick-section .menu-cat-title { margin-bottom: 10px; }
+.quick-buttons { display: flex; gap: 10px; }
+.quick-buttons .btn { flex: 1; }
 
 /* ---------- Selector de imagen (producto) ---------- */
 .img-picker { display: flex; align-items: center; gap: 14px; }
@@ -617,9 +698,21 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 
 /* ---------- Carrito (dentro del modal) ---------- */
 .cart-item { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.cart-item .ci-img {
+  width: 40px; height: 40px; flex: 0 0 40px; border-radius: 8px;
+  background-size: cover; background-position: center;
+  border: 1px solid var(--border);
+}
 .cart-item .ci-info { flex: 1; min-width: 0; }
 .cart-item .ci-name { font-weight: 600; font-size: .95rem; }
 .cart-item .ci-price { font-size: .82rem; color: var(--text-muted); }
+.cart-item .ci-note, .cart-item .ci-note-add {
+  border: none; background: none; padding: 2px 0 0; font-size: .78rem;
+  display: flex; align-items: center; gap: 4px; text-align: left;
+}
+.cart-item .ci-note-add { color: var(--primary); font-weight: 600; }
+.cart-item .ci-note { color: var(--text-muted); }
+.cart-item .ci-remove { width: 32px; height: 32px; flex: 0 0 32px; color: var(--text-muted); }
 .qty-ctrl { display: flex; align-items: center; gap: 4px; }
 .qty-btn { width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); font-size: 1.2rem; font-weight: 700; display: grid; place-items: center; }
 .qty-num { min-width: 28px; text-align: center; font-weight: 700; }
@@ -664,6 +757,8 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .ticket .t-row { display: flex; justify-content: space-between; }
 .ticket .t-total { font-weight: 700; font-size: 1.05rem; }
 .ticket .t-order-type { font-weight: 700; margin-top: 2px; }
+.ticket .t-pre { white-space: pre-wrap; word-break: break-word; }
+.ticket .t-item-note { padding-left: 12px; font-size: .78rem; opacity: .8; }
 
 .toast {
   position: fixed;
