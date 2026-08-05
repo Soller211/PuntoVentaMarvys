@@ -1,0 +1,19 @@
+{
+  "name": "Punto de Venta",
+  "short_name": "PDV",
+  "description": "Punto de venta para restaurante a domicilio",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f4f5",
+  "theme_color": "#e11d48",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

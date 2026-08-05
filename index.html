@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#e11d48" />
+  <title>Punto de Venta</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Encabezado -->
+  <header class="app-header">
+    <div class="brand" id="brandName">Punto de Venta</div>
+    <div class="header-total" id="dayTotal">Hoy: $0</div>
+  </header>
+
+  <!-- Contenido: las vistas se muestran/ocultan -->
+  <main id="app">
+    <!-- VENDER -->
+    <section class="view" id="view-vender">
+      <div class="pos-layout">
+        <div class="pos-products">
+          <div class="pos-search">
+            <span class="search-ico">🔍</span>
+            <input id="productSearch" type="search" placeholder="Buscar producto…" autocomplete="off">
+          </div>
+          <div class="cat-bar" id="catBar"></div>
+          <div class="product-grid" id="productGrid"></div>
+        </div>
+        <!-- Panel del pedido: al lado en pantalla grande, hoja inferior en teléfono -->
+        <aside class="order-panel" id="orderPanel"></aside>
+      </div>
+      <!-- Botón flotante (solo teléfono) para abrir el pedido -->
+      <button class="cart-fab" id="cartFab" hidden>
+        <span class="fab-left"><span class="fab-badge" id="cartFabCount">0</span> Ver pedido</span>
+        <strong id="cartFabTotal">$0</strong>
+      </button>
+    </section>
+
+    <!-- HISTORIAL -->
+    <section class="view" id="view-historial" hidden>
+      <div class="hist-summary" id="histSummary"></div>
+      <div class="hist-list" id="histList"></div>
+    </section>
+
+    <!-- MENÚ (administrar productos) -->
+    <section class="view" id="view-menu" hidden>
+      <div class="section-actions">
+        <button class="btn btn-primary" id="addProductBtn">+ Agregar producto</button>
+      </div>
+      <div class="menu-admin" id="menuAdmin"></div>
+    </section>
+
+    <!-- AJUSTES -->
+    <section class="view" id="view-ajustes" hidden>
+      <div class="settings-form" id="settingsForm"></div>
+    </section>
+  </main>
+
+  <!-- Navegación inferior -->
+  <nav class="bottom-nav">
+    <button class="nav-btn active" data-view="vender">
+      <span class="nav-ico">🛒</span><span>Vender</span>
+    </button>
+    <button class="nav-btn" data-view="historial">
+      <span class="nav-ico">📊</span><span>Historial</span>
+    </button>
+    <button class="nav-btn" data-view="menu">
+      <span class="nav-ico">🍽️</span><span>Menú</span>
+    </button>
+    <button class="nav-btn" data-view="ajustes">
+      <span class="nav-ico">⚙️</span><span>Ajustes</span>
+    </button>
+  </nav>
+
+  <!-- Fondo oscuro para la hoja del pedido en teléfono -->
+  <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+
+  <!-- Contenedor de ventanas emergentes (modales) -->
+  <div class="modal-backdrop" id="modalBackdrop" hidden>
+    <div class="modal" id="modal"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
