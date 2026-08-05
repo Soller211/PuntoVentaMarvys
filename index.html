@@ -13,7 +13,10 @@
 <body>
   <!-- Encabezado -->
   <header class="app-header">
-    <div class="brand" id="brandName">Punto de Venta</div>
+    <div class="brand">
+      <span class="brand-logo" id="brandLogo">🍽️</span>
+      <span id="brandName">Punto de Venta</span>
+    </div>
     <div class="header-total" id="dayTotal">Hoy: $0</div>
   </header>
 
@@ -69,20 +72,20 @@
   <!-- Navegación inferior -->
   <nav class="bottom-nav">
     <button class="nav-btn active" data-view="vender">
-      <span class="nav-ico">🛒</span><span>Vender</span>
+      <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></span><span>Vender</span>
     </button>
     <button class="nav-btn" data-view="pedidos">
-      <span class="nav-ico">🛵</span><span>Pedidos</span>
+      <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2h6a1 1 0 0 1 1 1v1H8V3a1 1 0 0 1 1-1z"/><path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"/><path d="m9 14 2 2 4-4"/></svg></span><span>Pedidos</span>
       <span class="nav-badge" id="pedidosBadge" hidden>0</span>
     </button>
     <button class="nav-btn" data-view="historial">
-      <span class="nav-ico">📊</span><span>Historial</span>
+      <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx="1"/><rect x="12" y="8" width="3" height="10" rx="1"/><rect x="17" y="5" width="3" height="13" rx="1"/></svg></span><span>Historial</span>
     </button>
     <button class="nav-btn" data-view="menu">
-      <span class="nav-ico">🍽️</span><span>Menú</span>
+      <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v7a2 2 0 0 0 4 0V3"/><path d="M6 10v11"/><path d="M17 3c-1.7 0-3 1.8-3 4.5S15.3 12 17 12h1V3z"/><path d="M18 12v9"/></svg></span><span>Menú</span>
     </button>
     <button class="nav-btn" data-view="ajustes">
-      <span class="nav-ico">⚙️</span><span>Ajustes</span>
+      <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span>Ajustes</span>
     </button>
   </nav>
 

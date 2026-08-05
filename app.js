@@ -64,6 +64,7 @@ const DEFAULT_SETTINGS = {
   currency: '$',
   defaultDeliveryFee: 0,
   primaryColor: '#e11d48',
+  logo: '',
   categories: ['Platillos', 'Entradas', 'Bebidas', 'Postres'],
 };
 const COLOR_PRESETS = ['#e11d48', '#ea580c', '#d97706', '#16a34a', '#0891b2', '#2563eb', '#7c3aed', '#db2777', '#0f172a'];
@@ -103,7 +104,10 @@ function saveProducts() {
   catch (e) { toast('⚠️ Almacenamiento lleno. Usa imágenes más pequeñas o quita algunas.'); return false; }
 }
 const saveOrders = () => DB.set('mv_orders', S.orders);
-const saveSettings = () => DB.set('mv_settings', S.settings);
+function saveSettings() {
+  try { DB.set('mv_settings', S.settings); return true; }
+  catch (e) { toast('⚠️ Almacenamiento lleno. Usa un logo/imágenes más pequeñas.'); return false; }
+}
 
 /* ---------- Tema (color del negocio) ---------- */
 function hexToRgb(hex) {
@@ -128,6 +132,13 @@ function applyColorValue(primary) {
   if (meta) meta.content = primary;
 }
 function applyTheme() { applyColorValue(S.settings.primaryColor || '#e11d48'); }
+
+function applyBranding() {
+  const name = $('#brandName');
+  if (name) name.textContent = S.settings.restaurantName || 'Punto de Venta';
+  const logo = $('#brandLogo');
+  if (logo) logo.innerHTML = S.settings.logo ? `<img src="${S.settings.logo}" alt="logo">` : '🍽️';
+}
 
 /* ---------- Redimensionar imágenes (para no llenar el almacenamiento) ---------- */
 function resizeImage(file, maxSize, cb) {
@@ -448,6 +459,7 @@ function ticketHtml(o) {
   ` : '';
 
   return `<div class="ticket">
+    ${S.settings.logo ? `<div class="t-center"><img src="${S.settings.logo}" style="max-width:130px;max-height:70px;object-fit:contain"></div>` : ''}
     <div class="t-center t-big">${escapeHtml(S.settings.restaurantName || 'Restaurante')}</div>
     ${S.settings.phone ? `<div class="t-center">Tel: ${escapeHtml(S.settings.phone)}</div>` : ''}
     ${S.settings.address ? `<div class="t-center">${escapeHtml(S.settings.address)}</div>` : ''}
@@ -848,6 +860,17 @@ function saveProduct() {
 function renderSettings() {
   const s = S.settings;
   $('#settingsForm').innerHTML = `
+    <div class="field">
+      <label>Logo del negocio (opcional)</label>
+      <div class="img-picker">
+        <div class="img-preview" id="logoPreview" style="${s.logo ? `background-image:url('${s.logo}')` : ''}">${s.logo ? '' : '🍽️'}</div>
+        <div class="img-actions">
+          <button type="button" class="btn" id="pickLogo">${s.logo ? 'Cambiar' : 'Elegir logo'}</button>
+          <button type="button" class="btn btn-ghost" id="removeLogo" ${s.logo ? '' : 'hidden'}>Quitar</button>
+        </div>
+      </div>
+      <input type="file" id="logoFile" accept="image/*" hidden>
+    </div>
     <div class="field"><label>Nombre del negocio</label><input id="setName" value="${escapeHtml(s.restaurantName)}"></div>
     <div class="field"><label>Teléfono</label><input id="setPhone" type="tel" value="${escapeHtml(s.phone)}"></div>
     <div class="field"><label>Dirección</label><input id="setAddress" value="${escapeHtml(s.address)}"></div>
@@ -887,7 +910,7 @@ function saveSettingsForm() {
   if ($('#setColor')) S.settings.primaryColor = $('#setColor').value;
   saveSettings();
   applyTheme();
-  $('#brandName').textContent = S.settings.restaurantName;
+  applyBranding();
   updateDayTotal();
   toast('Ajustes guardados');
 }
@@ -998,8 +1021,8 @@ function finishOnboarding(skip) {
   S.settings.onboarded = true;
   saveSettings();
   applyTheme();
+  applyBranding();
   $('#onboarding').hidden = true;
-  $('#brandName').textContent = S.settings.restaurantName;
   switchView('vender');
   if (!skip) toast('¡Listo! Ya puedes vender 🎉');
 }
@@ -1124,6 +1147,8 @@ document.addEventListener('click', (e) => {
         if (S.view === 'pedidos') renderPedidos(); else renderHistorial();
       }
       break;
+    case 'pickLogo': $('#logoFile').click(); break;
+    case 'removeLogo': S.settings.logo = ''; saveSettings(); applyBranding(); renderSettings(); break;
     case 'restartOnboarding':
       obStep = 0;
       obData = { name: S.settings.restaurantName === 'Mi Restaurante' ? '' : S.settings.restaurantName, color: S.settings.primaryColor || '#e11d48', sample: S.products.length > 0 };
@@ -1166,6 +1191,10 @@ document.addEventListener('input', (e) => {
     applyColorValue(obData.color);
     $$('.swatch[data-obcolor]').forEach((b) => b.classList.remove('active'));
   }
+  if (e.target.id === 'logoFile') {
+    const f = e.target.files && e.target.files[0];
+    if (f) resizeImage(f, 240, (d) => { S.settings.logo = d; if (saveSettings() !== false) { applyBranding(); renderSettings(); toast('Logo actualizado'); } });
+  }
 });
 
 // Guardar lo que se escribe en el cobro (para recalcular cambio en vivo)
@@ -1185,6 +1214,7 @@ document.addEventListener('input', (e) => {
    INICIO
    ============================================================ */
 applyTheme();
+applyBranding();
 updateDayTotal();
 updateActiveBadge();
 switchView('vender');
