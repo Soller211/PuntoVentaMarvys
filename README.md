@@ -21,6 +21,15 @@ Después entra a **⚙️ Ajustes** para poner el nombre y color de tu negocio, 
 > Cada dispositivo guarda **su propia** información. Repite la instalación en cada
 > aparato donde lo vayas a usar y haz respaldos desde *Ajustes → Exportar respaldo*.
 
+### 💻 Para computadora con Windows (programa instalable)
+Descarga el instalador desde la sección **[Releases](https://github.com/Soller211/PuntoVentaMarvys/releases/latest)**
+(archivo `Punto de Venta Setup X.X.X.exe`), dale doble clic e instálalo. Queda como
+un programa normal de Windows, con su ícono, y funciona **sin internet**.
+
+> La primera vez, Windows puede mostrar *"Windows protegió tu PC"* porque el
+> instalador no tiene firma de pago. Haz clic en **Más información → Ejecutar de
+> todas formas**. Es normal en software independiente.
+
 ---
 
 
