@@ -4,6 +4,26 @@ App web sencilla para tomar pedidos, cobrar y llevar el historial de ventas.
 Funciona en **teléfono** y en la **computadora/tablet de la tienda**, incluso **sin internet**.
 Todo se guarda **en el mismo dispositivo** (no necesita servidor).
 
+## 🚀 Instalarlo en tu negocio (lo más fácil)
+
+**Abre este enlace en tu teléfono, tablet o computadora:**
+
+### 👉 https://soller211.github.io/PuntoVentaMarvys/
+
+Luego agrégalo como app (queda un ícono en la pantalla y funciona sin internet):
+- **Android / Chrome:** menú ⋮ → *Agregar a pantalla principal*.
+- **iPhone / Safari:** botón compartir ⬆️ → *Agregar a inicio*.
+- **Computadora / Chrome o Edge:** ícono de instalar ⊕ a la derecha de la barra de dirección.
+
+Después entra a **⚙️ Ajustes** para poner el nombre y color de tu negocio, y a
+**🍽️ Menú** para cargar tus productos con sus precios y fotos. ¡Listo para vender!
+
+> Cada dispositivo guarda **su propia** información. Repite la instalación en cada
+> aparato donde lo vayas a usar y haz respaldos desde *Ajustes → Exportar respaldo*.
+
+---
+
+
 ## ✨ Qué incluye
 - **Vender:** menú por categorías, buscador, armar el pedido (siempre visible al lado), domicilio o para llevar.
 - **Imágenes en los productos** para reconocerlos de un vistazo.
