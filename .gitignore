@@ -1,0 +1,8 @@
+# Dependencias y compilados (no se suben; se generan al construir)
+node_modules/
+dist/
+build/icon.png
+
+# Respaldos exportados y archivos del sistema
+respaldo-pos-*.json
+.DS_Store

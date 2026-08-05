@@ -1,0 +1,42 @@
+name: Construir instalador de Windows
+
+# Se ejecuta cuando publicas una versión (tag vX.X.X)
+# o cuando lo lanzas a mano desde la pestaña "Actions".
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar dependencias
+        run: npm install
+
+      - name: Compilar el instalador
+        run: npm run dist
+
+      - name: Guardar el instalador como descarga
+        uses: actions/upload-artifact@v4
+        with:
+          name: instalador-windows
+          path: dist/*.exe
+
+      - name: Publicar en Releases (solo al crear un tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
