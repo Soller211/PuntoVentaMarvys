@@ -1,0 +1,18 @@
+# Cloudflare solo debe publicar la app web (los archivos del punto de venta).
+# Todo lo de abajo NO se sube al sitio (evita el error de "Asset too large").
+
+node_modules
+dist
+build
+.github
+.git
+.wrangler
+wrangler.jsonc
+package.json
+package-lock.json
+build-icon.js
+electron-main.js
+server.js
+README.md
+.gitignore
+.assetsignore
