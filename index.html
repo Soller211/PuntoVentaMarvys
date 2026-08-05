@@ -40,6 +40,12 @@
       </button>
     </section>
 
+    <!-- PEDIDOS (estados de entrega) -->
+    <section class="view" id="view-pedidos" hidden>
+      <div class="pedidos-head" id="pedidosHead"></div>
+      <div class="pedidos-list" id="pedidosList"></div>
+    </section>
+
     <!-- HISTORIAL -->
     <section class="view" id="view-historial" hidden>
       <div class="hist-summary" id="histSummary"></div>
@@ -65,6 +71,10 @@
     <button class="nav-btn active" data-view="vender">
       <span class="nav-ico">🛒</span><span>Vender</span>
     </button>
+    <button class="nav-btn" data-view="pedidos">
+      <span class="nav-ico">🛵</span><span>Pedidos</span>
+      <span class="nav-badge" id="pedidosBadge" hidden>0</span>
+    </button>
     <button class="nav-btn" data-view="historial">
       <span class="nav-ico">📊</span><span>Historial</span>
     </button>
@@ -75,6 +85,9 @@
       <span class="nav-ico">⚙️</span><span>Ajustes</span>
     </button>
   </nav>
+
+  <!-- Pantalla de bienvenida / configuración guiada (primera vez) -->
+  <div class="onboarding" id="onboarding" hidden></div>
 
   <!-- Fondo oscuro para la hoja del pedido en teléfono -->
   <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>

@@ -21,6 +21,31 @@ const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); retur
 const dayKey = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
 const fmtDate = (ts) => new Date(ts).toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
 const fmtTime = (ts) => new Date(ts).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+function minsAgo(ts) {
+  const m = Math.round((Date.now() - ts) / 60000);
+  if (m < 1) return 'ahora';
+  if (m < 60) return `hace ${m} min`;
+  const h = Math.floor(m / 60);
+  return `hace ${h} h`;
+}
+
+/* ---------- Estados de entrega ---------- */
+const STATUS = {
+  preparacion: { label: 'En preparación', emoji: '👨‍🍳', color: '#d97706' },
+  camino: { label: 'En camino', emoji: '🛵', color: '#2563eb' },
+  listo: { label: 'Listo', emoji: '📦', color: '#0891b2' },
+  entregado: { label: 'Entregado', emoji: '🏁', color: '#16a34a' },
+};
+function statusFlow(type) {
+  return type === 'domicilio'
+    ? ['preparacion', 'camino', 'entregado']
+    : ['preparacion', 'listo', 'entregado'];
+}
+function nextStatus(o) {
+  const f = statusFlow(o.type);
+  const i = f.indexOf(o.status || 'preparacion');
+  return i >= 0 && i < f.length - 1 ? f[i + 1] : null;
+}
 
 /* ---------- Almacenamiento ---------- */
 const DB = {
@@ -67,6 +92,12 @@ const S = {
 if (!DB.get('mv_settings', null)) DB.set('mv_settings', S.settings);
 if (!DB.get('mv_products', null)) DB.set('mv_products', S.products);
 
+// Si ya venía usando la app (tenía ventas o nombre propio), no mostrar la bienvenida
+if (S.settings.onboarded === undefined) {
+  S.settings.onboarded = (S.orders.length > 0 || S.settings.restaurantName !== 'Mi Restaurante');
+  DB.set('mv_settings', S.settings);
+}
+
 function saveProducts() {
   try { DB.set('mv_products', S.products); return true; }
   catch (e) { toast('⚠️ Almacenamiento lleno. Usa imágenes más pequeñas o quita algunas.'); return false; }
@@ -88,8 +119,7 @@ function mix(hex, target, amt) {
   const b = Math.round(c.b + (target.b - c.b) * amt);
   return `rgb(${r},${g},${b})`;
 }
-function applyTheme() {
-  const primary = S.settings.primaryColor || '#e11d48';
+function applyColorValue(primary) {
   const root = document.documentElement.style;
   root.setProperty('--primary', primary);
   root.setProperty('--primary-dark', mix(primary, { r: 0, g: 0, b: 0 }, 0.20));
@@ -97,6 +127,7 @@ function applyTheme() {
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = primary;
 }
+function applyTheme() { applyColorValue(S.settings.primaryColor || '#e11d48'); }
 
 /* ---------- Redimensionar imágenes (para no llenar el almacenamiento) ---------- */
 function resizeImage(file, maxSize, cb) {
@@ -381,10 +412,12 @@ function confirmSale() {
     payment: checkout.payment,
     cashReceived: checkout.payment === 'efectivo' ? cashNum : null,
     change: checkout.payment === 'efectivo' && cashNum > 0 ? cashNum - total : null,
+    status: 'preparacion',
   };
 
   S.orders.unshift(order);
   saveOrders();
+  updateActiveBadge();
 
   // Limpiar carrito y datos de cobro
   S.cart = [];
@@ -504,6 +537,77 @@ function periodStart(period) {
   return 0;                                                     // todo
 }
 
+/* ============================================================
+   VISTA: PEDIDOS (estados de entrega)
+   ============================================================ */
+function activeOrders() {
+  return S.orders.filter((o) => (o.status || 'entregado') !== 'entregado');
+}
+function updateActiveBadge() {
+  const n = activeOrders().length;
+  const badge = $('#pedidosBadge');
+  if (!badge) return;
+  badge.textContent = n;
+  badge.hidden = n === 0;
+}
+
+function renderPedidos() {
+  const active = activeOrders().sort((a, b) => a.date - b.date); // más antiguos primero
+  $('#pedidosHead').innerHTML = `
+    <h2 class="pedidos-title">🛵 Pedidos activos <span class="count-chip">${active.length}</span></h2>
+    <p class="field-hint">Toca el botón grande para avanzar el estado. Al entregar, el pedido pasa al Historial.</p>
+  `;
+
+  if (active.length === 0) {
+    $('#pedidosList').innerHTML = `<div class="empty-state">
+      <span class="emoji">✅</span>No hay pedidos pendientes.<br>Las ventas nuevas aparecen aquí para darles seguimiento.</div>`;
+    return;
+  }
+
+  $('#pedidosList').innerHTML = active.map((o) => {
+    const st = STATUS[o.status || 'preparacion'];
+    const next = nextStatus(o);
+    const nextMeta = next ? STATUS[next] : null;
+    const itemsTxt = o.items.map((i) => `${i.qty}× ${escapeHtml(i.name)}`).join(', ');
+    const dom = o.type === 'domicilio';
+    return `
+      <div class="pedido-card" style="--st:${st.color}">
+        <div class="pc-top">
+          <div>
+            <span class="o-folio">#${o.folio}</span>
+            <span class="tag tag-${o.type}">${dom ? 'Domicilio' : 'Para llevar'}</span>
+          </div>
+          <span class="status-pill" style="background:${st.color}1a;color:${st.color}">${st.emoji} ${st.label}</span>
+        </div>
+        <div class="pc-items">${itemsTxt}</div>
+        ${dom && o.customer.address ? `<div class="pc-addr">📍 ${escapeHtml(o.customer.address)}${o.customer.name ? ' · ' + escapeHtml(o.customer.name) : ''}</div>` : ''}
+        <div class="pc-meta">
+          <span>${money(o.total)} · ${o.payment === 'efectivo' ? '💵 Efectivo' : '💳 Transf.'}</span>
+          <span>${minsAgo(o.date)}</span>
+        </div>
+        <div class="pc-actions">
+          ${nextMeta
+            ? `<button class="btn btn-primary btn-block" data-advance="${o.id}" style="background:${nextMeta.color};border-color:${nextMeta.color}">Marcar: ${nextMeta.emoji} ${nextMeta.label}</button>`
+            : ''}
+          <button class="icon-btn" data-order="${o.id}" title="Ver detalle">👁️</button>
+          ${dom && o.customer.phone ? `<button class="icon-btn" data-wapp="${o.id}" title="WhatsApp al cliente">💬</button>` : ''}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function advanceStatus(id) {
+  const o = S.orders.find((x) => x.id === id);
+  if (!o) return;
+  const n = nextStatus(o);
+  if (!n) return;
+  o.status = n;
+  saveOrders();
+  updateActiveBadge();
+  renderPedidos();
+  toast(n === 'entregado' ? 'Pedido entregado 🏁' : `Ahora: ${STATUS[n].label}`);
+}
+
 function renderHistorial() {
   const period = S.histPeriod || 'hoy';
   const start = periodStart(period);
@@ -592,6 +696,7 @@ function renderHistorial() {
             <div class="o-folio">#${o.folio}
               <span class="tag tag-${o.type}">${o.type === 'domicilio' ? 'Domicilio' : 'Llevar'}</span>
               <span class="tag tag-${o.payment}">${o.payment === 'efectivo' ? 'Efectivo' : 'Transf.'}</span>
+              ${o.status && o.status !== 'entregado' ? `<span class="tag" style="background:${STATUS[o.status].color}1a;color:${STATUS[o.status].color}">${STATUS[o.status].emoji} ${STATUS[o.status].label}</span>` : ''}
             </div>
             <div class="o-meta">${fmtTime(o.date)} · ${o.items.reduce((s, i) => s + i.qty, 0)} art.${o.customer.name ? ' · ' + escapeHtml(o.customer.name) : ''}</div>
           </div>
@@ -605,12 +710,24 @@ function renderHistorial() {
 function openOrderDetail(id) {
   const o = S.orders.find((x) => x.id === id);
   if (!o) return;
+  const st = STATUS[o.status || 'entregado'];
+  const next = nextStatus(o);
+  const nextMeta = next ? STATUS[next] : null;
+  const statusBar = `
+    <div class="detail-status">
+      <span>Estado:</span>
+      <span class="status-pill" style="background:${st.color}1a;color:${st.color}">${st.emoji} ${st.label}</span>
+      ${nextMeta ? `<button class="btn btn-primary" data-advance="${o.id}" style="background:${nextMeta.color};border-color:${nextMeta.color};margin-left:auto">→ ${nextMeta.label}</button>` : ''}
+    </div>`;
   openModal(`
     <div class="modal-head">
       <h2>Pedido #${o.folio}</h2>
       <button class="modal-close" data-close>✕</button>
     </div>
-    <div class="modal-body">${ticketHtml(o)}</div>
+    <div class="modal-body">
+      ${statusBar}
+      ${ticketHtml(o)}
+    </div>
     <div class="modal-foot" style="flex-wrap:wrap">
       <button class="btn" id="printTicket">🖨️ Imprimir</button>
       <button class="btn" id="waTicket">📱 WhatsApp</button>
@@ -748,6 +865,8 @@ function renderSettings() {
     </div>
     <button class="btn btn-primary" id="saveSettings">Guardar cambios</button>
 
+    <button class="btn" id="restartOnboarding" style="margin-top:4px">🚀 Ver guía de inicio otra vez</button>
+
     <div class="settings-danger">
       <h3 class="menu-cat-title">Datos</h3>
       <button class="btn" id="exportData">⬇️ Exportar respaldo (JSON)</button>
@@ -803,6 +922,89 @@ function importData(file) {
 }
 
 /* ============================================================
+   PANTALLA DE BIENVENIDA (configuración guiada)
+   ============================================================ */
+let obStep = 0;
+let obData = null;
+
+function maybeOnboard() {
+  if (S.settings.onboarded) return false;
+  obStep = 0;
+  obData = { name: '', color: S.settings.primaryColor || '#e11d48', sample: true };
+  renderOnboarding();
+  return true;
+}
+
+function renderOnboarding() {
+  const ob = $('#onboarding');
+  ob.hidden = false;
+  const dots = [0, 1, 2].map((i) => `<span class="ob-dot ${i === obStep ? 'on' : ''}"></span>`).join('');
+
+  let body = '';
+  if (obStep === 0) {
+    body = `
+      <div class="ob-emoji">🍔</div>
+      <h1>¡Bienvenido!</h1>
+      <p>Vamos a configurar tu punto de venta en 3 pasos rápidos.</p>
+      <div class="field" style="text-align:left;margin-top:8px">
+        <label>¿Cómo se llama tu negocio?</label>
+        <input id="obName" placeholder="Ej. Tacos El Güero" value="${escapeHtml(obData.name)}" autocomplete="off">
+      </div>
+      <button class="btn btn-primary btn-block btn-lg" data-ob="next">Continuar →</button>
+      <button class="btn btn-ghost btn-block" data-ob="skip">Saltar por ahora</button>`;
+  } else if (obStep === 1) {
+    body = `
+      <div class="ob-emoji">🎨</div>
+      <h1>Elige tu color</h1>
+      <p>Se usará en toda la app. Verás el cambio al instante.</p>
+      <div class="color-presets" style="justify-content:center;margin:8px 0 4px">
+        ${COLOR_PRESETS.map((c) => `<button type="button" class="swatch ${c.toLowerCase() === obData.color.toLowerCase() ? 'active' : ''}" data-obcolor="${c}" style="background:${c}"></button>`).join('')}
+        <label class="swatch swatch-custom">🎨<input type="color" id="obColor" value="${escapeHtml(obData.color)}"></label>
+      </div>
+      <button class="btn btn-primary btn-block btn-lg" data-ob="next">Continuar →</button>
+      <button class="btn btn-ghost btn-block" data-ob="back">← Atrás</button>`;
+  } else {
+    body = `
+      <div class="ob-emoji">🍽️</div>
+      <h1>Tu menú</h1>
+      <p>¿Cómo quieres empezar?</p>
+      <button type="button" class="ob-choice ${obData.sample ? 'active' : ''}" data-obsample="1">
+        <strong>🍽️ Con menú de ejemplo</strong>
+        <small>Trae productos de muestra que puedes editar o borrar. Ideal para aprender rápido.</small>
+      </button>
+      <button type="button" class="ob-choice ${obData.sample ? '' : 'active'}" data-obsample="0">
+        <strong>✏️ Empezar vacío</strong>
+        <small>Agrego mis propios productos desde cero.</small>
+      </button>
+      <button class="btn btn-primary btn-block btn-lg" data-ob="finish">¡Empezar a vender! 🚀</button>
+      <button class="btn btn-ghost btn-block" data-ob="back">← Atrás</button>`;
+  }
+
+  ob.innerHTML = `<div class="ob-card"><div class="ob-progress">${dots}</div>${body}</div>`;
+  if (obStep === 0) setTimeout(() => { const el = $('#obName'); if (el) el.focus(); }, 60);
+}
+
+function captureObName() {
+  const el = $('#obName');
+  if (el) obData.name = el.value;
+}
+
+function finishOnboarding(skip) {
+  if (!skip) {
+    if (obData.name.trim()) S.settings.restaurantName = obData.name.trim();
+    S.settings.primaryColor = obData.color;
+    if (!obData.sample && S.orders.length === 0) { S.products = []; saveProducts(); }
+  }
+  S.settings.onboarded = true;
+  saveSettings();
+  applyTheme();
+  $('#onboarding').hidden = true;
+  $('#brandName').textContent = S.settings.restaurantName;
+  switchView('vender');
+  if (!skip) toast('¡Listo! Ya puedes vender 🎉');
+}
+
+/* ============================================================
    NAVEGACIÓN ENTRE VISTAS
    ============================================================ */
 function switchView(view) {
@@ -810,6 +1012,7 @@ function switchView(view) {
   $$('.view').forEach((v) => { v.hidden = v.id !== 'view-' + view; });
   $$('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   if (view === 'vender') renderPOS();
+  if (view === 'pedidos') renderPedidos();
   if (view === 'historial') renderHistorial();
   if (view === 'menu') renderMenu();
   if (view === 'ajustes') renderSettings();
@@ -819,7 +1022,7 @@ function switchView(view) {
    EVENTOS (delegación desde el documento)
    ============================================================ */
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-view],[data-add],[data-cat],[data-close],[data-qty],[data-order],[data-toggle],[data-edit],[data-delete],[data-type],[data-pay],[data-clearcart],[data-closesheet],[data-color],[data-period]');
+  const t = e.target.closest('[data-view],[data-add],[data-cat],[data-close],[data-qty],[data-order],[data-toggle],[data-edit],[data-delete],[data-type],[data-pay],[data-clearcart],[data-closesheet],[data-color],[data-period],[data-advance],[data-wapp],[data-ob],[data-obcolor],[data-obsample]');
 
   // Navegación
   const nav = e.target.closest('.nav-btn');
@@ -864,6 +1067,31 @@ document.addEventListener('click', (e) => {
   // Historial: filtro de periodo
   if (t.dataset.period) { S.histPeriod = t.dataset.period; renderHistorial(); return; }
 
+  // Pedidos: avanzar estado de entrega
+  if (t.dataset.advance) {
+    const openId = !modalBackdrop.hidden ? modalEl.dataset.orderId : null;
+    advanceStatus(t.dataset.advance);
+    if (openId) { closeModal(); if (S.view === 'historial') renderHistorial(); if (S.view === 'pedidos') renderPedidos(); }
+    return;
+  }
+
+  // Pedidos: WhatsApp al cliente
+  if (t.dataset.wapp) { const o = S.orders.find((x) => x.id === t.dataset.wapp); if (o) whatsappTicket(o); return; }
+
+  // Bienvenida: elegir color
+  if (t.dataset.obcolor) { obData.color = t.dataset.obcolor; applyColorValue(obData.color); renderOnboarding(); return; }
+  // Bienvenida: elegir tipo de menú
+  if (t.dataset.obsample !== undefined) { obData.sample = t.dataset.obsample === '1'; renderOnboarding(); return; }
+  // Bienvenida: pasos
+  if (t.dataset.ob) {
+    const action = t.dataset.ob;
+    if (action === 'next') { if (obStep === 0) captureObName(); obStep++; renderOnboarding(); }
+    else if (action === 'back') { obStep--; renderOnboarding(); }
+    else if (action === 'skip') { finishOnboarding(true); }
+    else if (action === 'finish') { finishOnboarding(false); }
+    return;
+  }
+
   // Historial: abrir detalle
   if (t.dataset.order) { openOrderDetail(t.dataset.order); return; }
 
@@ -892,8 +1120,14 @@ document.addEventListener('click', (e) => {
     case 'deleteOrder':
       if (confirm('¿Borrar esta venta del historial?')) {
         S.orders = S.orders.filter((o) => o.id !== modalEl.dataset.orderId);
-        saveOrders(); closeModal(); updateDayTotal(); renderHistorial();
+        saveOrders(); closeModal(); updateDayTotal(); updateActiveBadge();
+        if (S.view === 'pedidos') renderPedidos(); else renderHistorial();
       }
+      break;
+    case 'restartOnboarding':
+      obStep = 0;
+      obData = { name: S.settings.restaurantName === 'Mi Restaurante' ? '' : S.settings.restaurantName, color: S.settings.primaryColor || '#e11d48', sample: S.products.length > 0 };
+      renderOnboarding();
       break;
     case 'addProductBtn': openProductForm(null); break;
     case 'pickImg': $('#pImgFile').click(); break;
@@ -910,7 +1144,7 @@ document.addEventListener('click', (e) => {
     case 'importData': $('#importFile').click(); break;
     case 'clearData':
       if (confirm('¿Borrar TODAS las ventas? Esto no se puede deshacer.')) {
-        S.orders = []; saveOrders(); updateDayTotal(); toast('Ventas borradas');
+        S.orders = []; saveOrders(); updateDayTotal(); updateActiveBadge(); toast('Ventas borradas');
       }
       break;
   }
@@ -926,6 +1160,11 @@ document.addEventListener('input', (e) => {
     S.settings.primaryColor = e.target.value;
     applyTheme(); saveSettings();
     $$('.swatch[data-color]').forEach((b) => b.classList.remove('active'));
+  }
+  if (e.target.id === 'obColor' && obData) {
+    obData.color = e.target.value;
+    applyColorValue(obData.color);
+    $$('.swatch[data-obcolor]').forEach((b) => b.classList.remove('active'));
   }
 });
 
@@ -947,7 +1186,9 @@ document.addEventListener('input', (e) => {
    ============================================================ */
 applyTheme();
 updateDayTotal();
+updateActiveBadge();
 switchView('vender');
+maybeOnboard();
 
 // Registrar service worker (para que funcione sin internet, si está en un servidor)
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {

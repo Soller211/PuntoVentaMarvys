@@ -1,6 +1,6 @@
 /* Service Worker: permite que la app funcione sin internet.
    Guarda una copia de los archivos y los sirve desde el dispositivo. */
-const CACHE = 'pdv-v3';
+const CACHE = 'pdv-v4';
 const ASSETS = [
   './',
   './index.html',
