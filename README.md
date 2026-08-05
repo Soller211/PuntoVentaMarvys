@@ -8,7 +8,7 @@ Todo se guarda **en el mismo dispositivo** (no necesita servidor).
 
 **Abre este enlace en tu teléfono, tablet o computadora:**
 
-### 👉 https://soller211.github.io/PuntoVentaMarvys/
+### 👉 https://sollerventapoint.esolergonzalez.workers.dev
 
 Luego agrégalo como app (queda un ícono en la pantalla y funciona sin internet):
 - **Android / Chrome:** menú ⋮ → *Agregar a pantalla principal*.
