@@ -89,7 +89,32 @@ const DEFAULT_SETTINGS = {
   nextFolio: 1,
   categories: ['Platillos', 'Entradas', 'Bebidas', 'Postres'],
   categoryColors: {},
+  fontScale: 1,             // tamaño de la letra de la app (ver FONT_SCALES)
+  ticketSize: 14,           // tamaño de la letra del ticket, en px
+  ticketWeight: 'gruesa',   // grosor de la letra del ticket (ver TICKET_WEIGHTS)
 };
+
+/* Opciones de letra que se ofrecen en Ajustes. */
+const FONT_SCALES = [
+  { id: 0.9, label: 'Chica' },
+  { id: 1, label: 'Normal' },
+  { id: 1.15, label: 'Grande' },
+  { id: 1.3, label: 'Muy grande' },
+];
+const TICKET_SIZES = [
+  { id: 12, label: 'Chica' },
+  { id: 14, label: 'Normal' },
+  { id: 16, label: 'Grande' },
+  { id: 18, label: 'Muy grande' },
+];
+// "Courier New" solo tiene redonda y negrita de verdad, así que para el nivel
+// más grueso se engorda el trazo con una sombra del mismo color: es lo que
+// mejor se lee en las impresoras térmicas, que imprimen flojo.
+const TICKET_WEIGHTS = [
+  { id: 'normal', label: 'Normal', weight: 400, thicken: 'none' },
+  { id: 'gruesa', label: 'Gruesa', weight: 700, thicken: 'none' },
+  { id: 'extra', label: 'Extra gruesa', weight: 700, thicken: '.4px 0 0 currentColor' },
+];
 const COLOR_PRESETS = ['#e11d48', '#ea580c', '#d97706', '#16a34a', '#0891b2', '#2563eb', '#7c3aed', '#db2777', '#0f172a'];
 const CURRENCY_OPTIONS = ['$', 'US$', '€', 'Bs', 'S/', 'Q', 'L', 'C$', '₡', 'Gs', 'B/.', '£'];
 const SAMPLE_PRODUCTS = [
@@ -133,6 +158,15 @@ if (!S.settings.nextFolio) {
   DB.set('mv_settings', S.settings);
 }
 
+// Migración: antes había un interruptor de dos posiciones ("Tamaño de la
+// interfaz: normal/grande"). Ahora es un tamaño de letra con más niveles, así
+// que quien tenía "grande" se queda en el nivel equivalente.
+if (S.settings.fontScale === undefined) {
+  S.settings.fontScale = S.settings.uiSize === 'grande' ? 1.15 : 1;
+  delete S.settings.uiSize;
+  DB.set('mv_settings', S.settings);
+}
+
 // Entrega un folio nuevo y único cada vez (nunca se repite, aunque se borren ventas).
 function nextFolio() {
   const folio = S.settings.nextFolio;
@@ -152,9 +186,11 @@ function saveCustomers() {
 }
 const customerKey = (phone) => String(phone || '').replace(/\D/g, '');
 // Guarda o actualiza un cliente cuando se confirma una venta con teléfono.
-function upsertCustomer({ name, phone, address, notes, company }) {
+// Actualiza la lista en memoria pero NO guarda: así una importación de muchos
+// clientes puede grabar una sola vez al final en vez de una vez por fila.
+function upsertCustomerRecord({ name, phone, address, notes, company }) {
   const key = customerKey(phone);
-  if (!key) return;
+  if (!key) return false;
   let c = S.customers.find((x) => x.phone === key);
   if (c) {
     if (name) c.name = name;
@@ -165,7 +201,10 @@ function upsertCustomer({ name, phone, address, notes, company }) {
   } else {
     S.customers.push({ id: uid(), name: name || '', phone: key, address: address || '', notes: notes || '', company: company || '', createdAt: Date.now(), updatedAt: Date.now() });
   }
-  saveCustomers();
+  return true;
+}
+function upsertCustomer(data) {
+  if (upsertCustomerRecord(data)) saveCustomers();
 }
 
 // Empresas: varios clientes (distinto nombre/teléfono) pueden compartir la misma
@@ -248,6 +287,53 @@ function applyColorValue(primary) {
   if (meta) meta.content = primary;
 }
 function applyTheme() { applyColorValue(S.settings.primaryColor || '#e11d48'); }
+
+/* ---------- Letra (tamaño de la app y del ticket) ----------
+   Todo el trabajo lo hace el CSS: aquí solo se escriben las variables.
+   Al cambiar --font-scale crecen juntos el texto, las tarjetas y los botones,
+   porque casi todas las medidas del CSS están en "rem". */
+const validFontScale = (v) => (FONT_SCALES.some((o) => o.id === Number(v)) ? Number(v) : 1);
+const validTicketSize = (v) => (TICKET_SIZES.some((o) => o.id === Number(v)) ? Number(v) : 14);
+const ticketWeightOption = (id) => TICKET_WEIGHTS.find((o) => o.id === id) || TICKET_WEIGHTS[1];
+
+function applyAppearance() {
+  const root = document.documentElement.style;
+  root.setProperty('--font-scale', String(validFontScale(S.settings.fontScale)));
+  root.setProperty('--ticket-size', `${validTicketSize(S.settings.ticketSize)}px`);
+  const w = ticketWeightOption(S.settings.ticketWeight);
+  root.setProperty('--ticket-weight', String(w.weight));
+  root.setProperty('--ticket-thicken', w.thicken);
+}
+
+function setFontScale(value) {
+  S.settings.fontScale = validFontScale(value);
+  saveSettings();
+  applyAppearance();
+  renderSettings();
+}
+function setTicketFont(key, value) {
+  if (key === 'size') S.settings.ticketSize = validTicketSize(value);
+  else S.settings.ticketWeight = ticketWeightOption(value).id;
+  saveSettings();
+  applyAppearance();
+  renderSettings();
+}
+
+// Ticket de muestra para que se vea el cambio al momento, sin hacer una venta.
+function ticketPreviewHtml() {
+  return `<div class="ticket">
+    <div class="t-center t-big">${escapeHtml(S.settings.restaurantName || 'Mi Restaurante')}</div>
+    <hr>
+    <div class="t-row"><span>Folio #123</span><span>12:30</span></div>
+    <div class="t-order-type">Pedido a domicilio</div>
+    <hr>
+    <div class="t-row"><span>2x Hamburguesa</span><span>${money(190)}</span></div>
+    <div class="t-item-note">— sin cebolla</div>
+    <div class="t-row"><span>1x Refresco</span><span>${money(25)}</span></div>
+    <hr>
+    <div class="t-row t-total"><span>TOTAL</span><span>${money(215)}</span></div>
+  </div>`;
+}
 
 function applyBranding() {
   const name = $('#brandName');
@@ -1294,7 +1380,10 @@ function renderHistorial() {
     <div class="seg period-seg">
       ${PERIODS.map((p) => `<button data-period="${p.id}" class="${p.id === period ? 'active' : ''}">${p.label}</button>`).join('')}
     </div>
-    <button class="btn btn-block" id="printReportBtn" style="margin-bottom:14px">${icon('printer')} Imprimir reporte</button>
+    <div class="quick-buttons" style="margin-bottom:14px">
+      <button class="btn" id="printReportBtn">${icon('printer')} Imprimir reporte</button>
+      <button class="btn" id="exportSalesBtn">${icon('download')} Exportar a Excel</button>
+    </div>
     <div class="stat-grid">
       <div class="stat-card"><div class="s-label">Ventas</div><div class="s-value">${money(total)}</div></div>
       <div class="stat-card"><div class="s-label">Pedidos</div><div class="s-value">${orders.length}</div></div>
@@ -1767,12 +1856,37 @@ function renderSettings() {
       </div>
       <span class="field-hint">El cambio se aplica al instante.</span>
     </div>
+    <div class="field">
+      <label>Tamaño de la letra</label>
+      <div class="seg seg-wrap">
+        ${FONT_SCALES.map((o) => `<button type="button" data-fontscale="${o.id}" class="${validFontScale(s.fontScale) === o.id ? 'active' : ''}">${o.label}</button>`).join('')}
+      </div>
+      <span class="field-hint">Cambia el texto y también los botones y las tarjetas de productos, para que todo siga cuadrando. Se ve al instante.</span>
+    </div>
+    <div class="quick-section">
+      <h3 class="menu-cat-title">Letra del ticket</h3>
+      <div class="field">
+        <label>Tamaño</label>
+        <div class="seg seg-wrap">
+          ${TICKET_SIZES.map((o) => `<button type="button" data-ticketsize="${o.id}" class="${validTicketSize(s.ticketSize) === o.id ? 'active' : ''}">${o.label}</button>`).join('')}
+        </div>
+      </div>
+      <div class="field">
+        <label>Grosor</label>
+        <div class="seg seg-wrap">
+          ${TICKET_WEIGHTS.map((o) => `<button type="button" data-ticketweight="${o.id}" class="${ticketWeightOption(s.ticketWeight).id === o.id ? 'active' : ''}">${o.label}</button>`).join('')}
+        </div>
+      </div>
+      <div class="ticket-preview">${ticketPreviewHtml()}</div>
+      <span class="field-hint">Así se imprimirá. Si tu impresora saca el texto muy claro, sube el grosor.</span>
+    </div>
     <button class="btn btn-primary" id="saveSettings">Guardar cambios</button>
 
     <button class="btn" id="restartOnboarding" style="margin-top:4px">${icon('rocket')} Ver guía de inicio otra vez</button>
 
     <div class="settings-danger">
       <h3 class="menu-cat-title">Datos</h3>
+      <button class="btn" id="openCsv" style="margin-bottom:8px">${icon('receipt')} Excel / CSV (importar y exportar)</button>
       <button class="btn" id="exportData">${icon('download')} Exportar respaldo (JSON)</button>
       <button class="btn" id="importData" style="margin-top:8px">${icon('upload')} Importar respaldo</button>
       <input type="file" id="importFile" accept="application/json" hidden>
@@ -1843,12 +1957,442 @@ function importData(file) {
         S.orders = data.orders;
         saveSettings(); saveProducts(); saveOrders();
         updateDayTotal();
+        applyAppearance();
         renderSettings();
         toast('Respaldo importado');
       }, { confirmLabel: 'Reemplazar todo', danger: true });
     } catch (e) { toast('Archivo no válido'); }
   };
   reader.readAsText(file);
+}
+
+/* ============================================================
+   EXCEL / CSV (exportar e importar)
+
+   Sin librerías: el CSV se escribe y se lee a mano. Detalles que
+   importan para que Excel en español lo abra bien de un doble clic:
+   - Se pone un BOM al inicio; si no, los acentos y las Ñ salen rotos.
+   - Se usa ";" para separar columnas y "," para los decimales, que es
+     lo que espera Excel en español/Latinoamérica.
+   - La primera línea "sep=;" le avisa a Excel cuál es el separador,
+     sin importar la configuración regional de la computadora.
+   Al importar se acepta cualquier variante (";", "," o tabulador;
+   decimales con punto o con coma), para que también sirva un archivo
+   hecho en otra computadora o exportado por otro programa.
+   ============================================================ */
+const CSV_SEP = ';';
+const CSV_NEEDS_QUOTES = new RegExp('["\\r\\n' + CSV_SEP + ']');
+
+function csvCell(value) {
+  const s = value == null ? '' : String(value);
+  // Las comillas dobles de adentro se escapan duplicándolas (estándar CSV).
+  return CSV_NEEDS_QUOTES.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+// Número con coma decimal, como lo espera Excel en español: 95.5 -> "95,5"
+function csvNumber(n) {
+  const v = Math.round((Number(n) || 0) * 100) / 100;
+  return String(v).replace('.', ',');
+}
+function buildCsv(headers, rows) {
+  const lines = [headers.map(csvCell).join(CSV_SEP)];
+  rows.forEach((r) => lines.push(r.map(csvCell).join(CSV_SEP)));
+  return `\uFEFFsep=${CSV_SEP}\r\n${lines.join('\r\n')}\r\n`;
+}
+function downloadFile(filename, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+function downloadCsv(name, headers, rows) {
+  downloadFile(`${name}-${new Date().toISOString().slice(0, 10)}.csv`,
+    buildCsv(headers, rows), 'text/csv;charset=utf-8;');
+}
+
+// Elige el separador contando cuál aparece más en la primera línea
+// (sin contar lo que esté entre comillas).
+function detectCsvSeparator(text) {
+  const counts = { ';': 0, ',': 0, '\t': 0 };
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') { quoted = !quoted; continue; }
+    if (quoted) continue;
+    if (c === '\n') break;
+    if (counts[c] !== undefined) counts[c]++;
+  }
+  const best = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+  return counts[best] > 0 ? best : CSV_SEP;
+}
+
+// Convierte el texto del archivo en una matriz de celdas.
+function parseCsv(text) {
+  let t = String(text).replace(/^\uFEFF/, '');
+  let sep = null;
+  const sepLine = t.match(/^sep=(.)\r?\n/i); // línea propia de Excel, no son datos
+  if (sepLine) { sep = sepLine[1]; t = t.slice(sepLine[0].length); }
+  if (!sep) sep = detectCsvSeparator(t);
+
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let quoted = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (quoted) {
+      if (c !== '"') { cell += c; }
+      else if (t[i + 1] === '"') { cell += '"'; i++; }  // comilla escapada
+      else { quoted = false; }
+      continue;
+    }
+    if (c === '"') { quoted = true; continue; }
+    if (c === sep) { row.push(cell); cell = ''; continue; }
+    if (c === '\r') continue;
+    if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; continue; }
+    cell += c;
+  }
+  row.push(cell);
+  rows.push(row);
+  // Fuera las filas totalmente vacías (líneas en blanco del final del archivo)
+  return rows.filter((r) => r.some((v) => String(v).trim() !== ''));
+}
+
+// Lee la columna de precio venga como venga: "95", "95,5", "$1,250.50", "1.250,50".
+function parseCsvNumber(str) {
+  const s = String(str == null ? '' : str).trim().replace(/[^\d,.-]/g, '');
+  if (!s) return NaN;
+  const lastComma = s.lastIndexOf(',');
+  const lastDot = s.lastIndexOf('.');
+  const cut = Math.max(lastComma, lastDot);
+  if (cut === -1) return parseFloat(s);
+
+  const oneKind = lastComma === -1 || lastDot === -1;          // solo hay comas o solo puntos
+  const repeated = s.split(s[cut]).length > 2;                 // ese signo aparece varias veces
+  // "1.234.567": todos son separadores de miles.
+  if (oneKind && repeated) return parseFloat(s.replace(/[.,]/g, ''));
+  // "1,250" / "1.250": un solo signo con exactamente 3 cifras detrás es
+  // separador de miles (nadie pone precios con 3 decimales).
+  if (oneKind && s.length - cut - 1 === 3) return parseFloat(s.replace(/[.,]/g, ''));
+  // En cualquier otro caso el último signo es el decimal.
+  return parseFloat(`${s.slice(0, cut).replace(/[.,]/g, '')}.${s.slice(cut + 1)}`);
+}
+
+// Para comparar encabezados sin importar mayúsculas ni acentos.
+const normHeader = (s) => String(s == null ? '' : s).trim().toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+// Busca en qué columna quedó cada dato. spec: { clave: [nombres aceptados] }
+function mapCsvColumns(headerRow, spec) {
+  const heads = headerRow.map(normHeader);
+  const out = {};
+  Object.keys(spec).forEach((k) => { out[k] = heads.findIndex((h) => spec[k].includes(h)); });
+  return out;
+}
+
+function readTextFile(file, cb) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const text = String(reader.result || '');
+    // Excel en Windows a veces guarda el CSV en "ANSI" (windows-1252) y los
+    // acentos llegan rotos (�). Si pasa, se relee con esa codificación.
+    if (text.includes('\uFFFD')) {
+      const r2 = new FileReader();
+      r2.onload = () => cb(String(r2.result || ''));
+      r2.onerror = () => cb(text);
+      r2.readAsText(file, 'windows-1252');
+      return;
+    }
+    cb(text);
+  };
+  reader.onerror = () => toast('No se pudo leer el archivo');
+  reader.readAsText(file, 'UTF-8');
+}
+
+/* ---------- Menú (productos) ---------- */
+const PRODUCT_CSV_HEADERS = ['Nombre', 'Precio', 'Categoria', 'Activo'];
+
+function exportProductsCsv() {
+  if (!S.products.length) { toast('No hay productos que exportar'); return; }
+  downloadCsv('menu', PRODUCT_CSV_HEADERS, S.products.map((p) => [
+    p.name, csvNumber(p.price), p.category, p.active === false ? 'No' : 'Si',
+  ]));
+  toast('Menú exportado');
+}
+
+// Archivo de ejemplo para que el negocio sepa qué columnas escribir.
+function downloadProductTemplate() {
+  downloadCsv('plantilla-menu', PRODUCT_CSV_HEADERS, [
+    ['Hamburguesa', csvNumber(95), 'Platillos', 'Si'],
+    ['Orden de papas', csvNumber(45), 'Entradas', 'Si'],
+    ['Refresco', csvNumber(25), 'Bebidas', 'Si'],
+    ['Postre de temporada', csvNumber(40), 'Postres', 'No'],
+  ]);
+  toast('Plantilla descargada');
+}
+
+const productKey = (name, cat) => `${String(name).trim().toLowerCase()}|${String(cat).trim().toLowerCase()}`;
+const NO_VALUES = ['no', 'n', 'false', '0', 'oculto', 'inactivo', 'off'];
+
+let pendingProductImport = null;
+function importProductsCsv(file) {
+  readTextFile(file, (text) => {
+    let rows = [];
+    try { rows = parseCsv(text); } catch (_) { rows = []; }
+    if (rows.length < 2) { toast('El archivo está vacío o no se pudo leer'); return; }
+
+    const cols = mapCsvColumns(rows[0], {
+      name: ['nombre', 'producto', 'name', 'descripcion', 'articulo'],
+      price: ['precio', 'price', 'costo', 'importe', 'monto'],
+      category: ['categoria', 'category', 'grupo', 'tipo'],
+      active: ['activo', 'active', 'visible', 'disponible'],
+    });
+    if (cols.name === -1 || cols.price === -1) {
+      toast('El archivo necesita las columnas "Nombre" y "Precio"');
+      return;
+    }
+
+    const parsed = [];
+    const errors = [];
+    rows.slice(1).forEach((r, i) => {
+      const name = String(r[cols.name] || '').trim();
+      if (!name) return; // fila sin nombre: se ignora sin avisar
+      const price = parseCsvNumber(r[cols.price]);
+      if (!isFinite(price) || price < 0) {
+        errors.push(`Fila ${i + 2}: "${name}" no tiene un precio válido`);
+        return;
+      }
+      const category = (cols.category > -1 ? String(r[cols.category] || '').trim() : '') || 'Sin categoría';
+      const active = cols.active > -1 ? !NO_VALUES.includes(normHeader(r[cols.active])) : true;
+      parsed.push({ name, price, category, active });
+    });
+
+    if (!parsed.length) {
+      toast(errors.length ? 'Ninguna fila tiene un precio válido' : 'No se encontraron productos');
+      return;
+    }
+    pendingProductImport = parsed;
+    showProductImportPreview(parsed, errors);
+  });
+}
+
+function showProductImportPreview(parsed, errors) {
+  const existing = new Set(S.products.map((p) => productKey(p.name, p.category)));
+  const nuevos = parsed.filter((p) => !existing.has(productKey(p.name, p.category))).length;
+  const actualizados = parsed.length - nuevos;
+  const muestra = parsed.slice(0, 6);
+
+  openModal(`
+    <div class="modal-head">
+      <h2>${icon('upload')} Revisar importación</h2>
+      <button class="modal-close" data-close>${icon('close', 16)}</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin-top:0">Se leyeron <strong>${parsed.length}</strong> productos:
+        <strong>${nuevos}</strong> nuevos y <strong>${actualizados}</strong> que ya existen.</p>
+      ${muestra.map((p) => `
+        <div class="menu-row">
+          <div class="m-info">
+            <div class="m-name">${escapeHtml(p.name)}${p.active ? '' : ' (oculto)'}</div>
+            <div class="field-hint">${escapeHtml(p.category)}</div>
+          </div>
+          <div class="m-price">${money(p.price)}</div>
+        </div>`).join('')}
+      ${parsed.length > muestra.length ? `<p class="field-hint">…y ${parsed.length - muestra.length} más.</p>` : ''}
+      ${errors.length ? `
+        <div class="field" style="margin-top:12px">
+          <label>${icon('alert')} Filas omitidas (${errors.length})</label>
+          <span class="field-hint">${errors.slice(0, 5).map(escapeHtml).join('<br>')}${errors.length > 5 ? '<br>…' : ''}</span>
+        </div>` : ''}
+    </div>
+    <div class="modal-foot" style="flex-wrap:wrap">
+      <button class="btn btn-primary btn-block" id="csvApplyMerge" style="flex:1 1 100%">
+        ${icon('checkCircle')} Agregar y actualizar
+      </button>
+      <button class="btn btn-danger btn-block" id="csvApplyReplace" style="flex:1 1 100%;margin-top:8px">
+        ${icon('trash')} Reemplazar todo el menú
+      </button>
+      <span class="field-hint" style="flex:1 1 100%;text-align:center">
+        "Agregar y actualizar" respeta los productos que no vengan en el archivo.
+      </span>
+    </div>
+  `);
+}
+
+function applyProductImport(mode) {
+  const parsed = pendingProductImport;
+  if (!parsed) { closeModal(); return; }
+
+  // Se trabaja sobre una copia: si al final no se puede guardar, el menú
+  // que ya estaba en pantalla queda intacto.
+  const previos = S.products;
+  const lista = mode === 'replace' ? [] : S.products.map((p) => ({ ...p }));
+  const index = new Map(lista.map((p) => [productKey(p.name, p.category), p]));
+  let nuevos = 0;
+  let actualizados = 0;
+  parsed.forEach((row) => {
+    const found = index.get(productKey(row.name, row.category));
+    if (found) {
+      // Se conservan la imagen y el id que ya tenía el producto.
+      Object.assign(found, { name: row.name, price: row.price, active: row.active });
+      actualizados++;
+    } else {
+      const p = { id: uid(), name: row.name, price: row.price, category: row.category, active: row.active, image: '' };
+      lista.push(p);
+      index.set(productKey(p.name, p.category), p);
+      nuevos++;
+    }
+  });
+
+  S.products = lista;
+  if (!saveProducts()) { S.products = previos; return; } // no se pudo guardar: se deja como estaba
+
+  // Registrar las categorías nuevas para que aparezcan al crear productos.
+  const cats = S.settings.categories || [];
+  parsed.forEach((row) => { if (!cats.includes(row.category)) cats.push(row.category); });
+  S.settings.categories = cats;
+  saveSettings();
+
+  pendingProductImport = null;
+  closeModal();
+  renderMenu();
+  renderPOS();
+  toast(`Listo: ${nuevos} nuevos, ${actualizados} actualizados`);
+}
+
+/* ---------- Ventas ---------- */
+function exportSalesCsv(period) {
+  const { orders } = computePeriodStats(period);
+  if (!orders.length) { toast('No hay ventas en ese periodo'); return; }
+  const headers = ['Folio', 'Fecha', 'Hora', 'Tipo', 'Estado', 'Cliente', 'Telefono', 'Empresa',
+    'Direccion', 'Productos', 'Subtotal', 'Descuento', 'Envio', 'Total', 'Pago'];
+  const rows = orders.slice().sort((a, b) => a.date - b.date).map((o) => {
+    const c = o.customer || {};
+    return [
+      o.folio,
+      new Date(o.date).toLocaleDateString('es-MX'),
+      fmtTime(o.date),
+      o.type === 'domicilio' ? 'Domicilio' : 'Para llevar',
+      (STATUS[o.status || 'entregado'] || {}).label || '',
+      c.name || '', c.phone || '', c.company || '', c.address || '',
+      o.items.map((i) => `${i.qty}x ${i.name}${i.notes ? ` (${i.notes})` : ''}`).join(', '),
+      csvNumber(o.subtotal),
+      csvNumber(o.discountAmount || 0),
+      csvNumber(o.deliveryFee || 0),
+      csvNumber(o.total),
+      o.payment === 'efectivo' ? 'Efectivo' : 'Transferencia/Tarjeta',
+    ];
+  });
+  downloadCsv(`ventas-${period}`, headers, rows);
+  toast(`${orders.length} ventas exportadas`);
+}
+
+/* ---------- Clientes ---------- */
+function exportCustomersCsv() {
+  if (!S.customers.length) { toast('No hay clientes guardados'); return; }
+  downloadCsv('clientes', ['Nombre', 'Telefono', 'Direccion', 'Empresa', 'Notas'],
+    S.customers.map((c) => [c.name || '', c.phone || '', c.address || '', c.company || '', c.notes || '']));
+  toast('Clientes exportados');
+}
+
+function importCustomersCsv(file) {
+  readTextFile(file, (text) => {
+    let rows = [];
+    try { rows = parseCsv(text); } catch (_) { rows = []; }
+    if (rows.length < 2) { toast('El archivo está vacío o no se pudo leer'); return; }
+
+    const cols = mapCsvColumns(rows[0], {
+      name: ['nombre', 'cliente', 'name'],
+      phone: ['telefono', 'tel', 'celular', 'phone', 'whatsapp'],
+      address: ['direccion', 'domicilio', 'address'],
+      company: ['empresa', 'compania', 'company', 'negocio'],
+      notes: ['notas', 'nota', 'observaciones', 'comentarios', 'notes'],
+    });
+    if (cols.phone === -1) { toast('El archivo necesita una columna "Telefono"'); return; }
+
+    const get = (r, i) => (i > -1 ? String(r[i] || '').trim() : '');
+    const previos = S.customers;
+    S.customers = S.customers.map((c) => ({ ...c })); // copia, por si falla al guardar
+    let guardados = 0;
+    let omitidos = 0;
+    rows.slice(1).forEach((r) => {
+      const phone = customerKey(get(r, cols.phone)); // deja solo dígitos
+      if (!phone) { omitidos++; return; }
+      upsertCustomerRecord({
+        name: get(r, cols.name),
+        phone,
+        address: get(r, cols.address),
+        notes: get(r, cols.notes),
+        company: get(r, cols.company),
+      });
+      guardados++;
+    });
+
+    if (guardados && !saveCustomers()) { S.customers = previos; return; }
+
+    closeModal();
+    if (S.view === 'ajustes') renderSettings();
+    toast(guardados
+      ? `${guardados} clientes importados${omitidos ? `, ${omitidos} sin teléfono` : ''}`
+      : 'Ningún cliente tenía teléfono');
+  });
+}
+
+/* ---------- Ventana de Excel / CSV ---------- */
+let csvImportTarget = null; // 'products' | 'customers'
+
+function openCsvModal() {
+  openModal(`
+    <div class="modal-head">
+      <h2>${icon('download')} Excel / CSV</h2>
+      <button class="modal-close" data-close>${icon('close', 16)}</button>
+    </div>
+    <div class="modal-body">
+      <p class="field-hint" style="margin-top:0">
+        Los archivos .csv se abren y se guardan con Excel, Google Sheets o Numbers.
+        Si los editas en Excel, guárdalos como <strong>CSV UTF-8</strong>.
+      </p>
+
+      <h3 class="menu-cat-title" style="margin-top:16px">Menú (productos)</h3>
+      <div class="quick-buttons">
+        <button class="btn" id="csvExportProducts">${icon('download')} Exportar menú</button>
+        <button class="btn" id="csvImportProducts">${icon('upload')} Importar menú</button>
+      </div>
+      <button class="btn btn-ghost btn-block" id="csvTemplate" style="margin-top:6px">
+        ${icon('receipt')} Descargar plantilla de ejemplo
+      </button>
+
+      <h3 class="menu-cat-title" style="margin-top:20px">Ventas</h3>
+      <div class="field">
+        <label>Periodo</label>
+        <select id="csvSalesPeriod">
+          ${PERIODS.map((p) => `<option value="${p.id}" ${p.id === (S.histPeriod || 'hoy') ? 'selected' : ''}>${p.label}</option>`).join('')}
+        </select>
+      </div>
+      <button class="btn btn-block" id="csvExportSales">${icon('download')} Exportar ventas</button>
+
+      <h3 class="menu-cat-title" style="margin-top:20px">Clientes</h3>
+      <div class="quick-buttons">
+        <button class="btn" id="csvExportCustomers">${icon('download')} Exportar clientes</button>
+        <button class="btn" id="csvImportCustomers">${icon('upload')} Importar clientes</button>
+      </div>
+
+      <input type="file" id="csvFile" accept=".csv,.txt,text/csv,text/plain" hidden>
+    </div>
+  `);
+}
+
+function pickCsvFile(target) {
+  csvImportTarget = target;
+  const input = $('#csvFile');
+  if (input) { input.value = ''; input.click(); }
+}
+
+function handleCsvFile(file) {
+  if (csvImportTarget === 'products') importProductsCsv(file);
+  else if (csvImportTarget === 'customers') importCustomersCsv(file);
+  csvImportTarget = null;
 }
 
 /* ============================================================
@@ -1953,7 +2497,7 @@ function switchView(view) {
    EVENTOS (delegación desde el documento)
    ============================================================ */
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-view],[data-add],[data-cat],[data-close],[data-qty],[data-removeitem],[data-itemnote],[data-order],[data-toggle],[data-edit],[data-delete],[data-type],[data-pay],[data-disctype],[data-clearcart],[data-closesheet],[data-color],[data-period],[data-advance],[data-revert],[data-wapp],[data-ob],[data-obcolor],[data-obsample],[data-editcustomer],[data-deletecustomer],[data-editcatcolor],[data-catcolor],[data-editcompany],[data-deletecompany],[data-pickcustomer],[data-pickcompany],[data-openentity]');
+  const t = e.target.closest('[data-view],[data-add],[data-cat],[data-close],[data-qty],[data-removeitem],[data-itemnote],[data-order],[data-toggle],[data-edit],[data-delete],[data-type],[data-pay],[data-disctype],[data-clearcart],[data-closesheet],[data-color],[data-period],[data-advance],[data-revert],[data-wapp],[data-ob],[data-obcolor],[data-obsample],[data-editcustomer],[data-deletecustomer],[data-editcatcolor],[data-catcolor],[data-editcompany],[data-deletecompany],[data-pickcustomer],[data-pickcompany],[data-openentity],[data-fontscale],[data-ticketsize],[data-ticketweight]');
 
   // Navegación
   const nav = e.target.closest('.nav-btn');
@@ -2006,6 +2550,11 @@ document.addEventListener('click', (e) => {
     applyTheme(); saveSettings(); renderSettings();
     return;
   }
+
+  // Ajustes: letra de la app y del ticket
+  if (t.dataset.fontscale) { setFontScale(t.dataset.fontscale); return; }
+  if (t.dataset.ticketsize) { setTicketFont('size', t.dataset.ticketsize); return; }
+  if (t.dataset.ticketweight) { setTicketFont('weight', t.dataset.ticketweight); return; }
 
   // Historial: filtro de periodo
   if (t.dataset.period) { S.histPeriod = t.dataset.period; renderHistorial(); return; }
@@ -2157,6 +2706,22 @@ document.addEventListener('click', (e) => {
     }
     case 'exportData': exportData(); break;
     case 'importData': $('#importFile').click(); break;
+
+    // Excel / CSV
+    case 'openCsv': case 'openCsvMenu': openCsvModal(); break;
+    case 'csvExportProducts': exportProductsCsv(); break;
+    case 'csvImportProducts': pickCsvFile('products'); break;
+    case 'csvTemplate': downloadProductTemplate(); break;
+    case 'csvExportSales': exportSalesCsv(($('#csvSalesPeriod') || {}).value || 'hoy'); break;
+    case 'csvExportCustomers': exportCustomersCsv(); break;
+    case 'csvImportCustomers': pickCsvFile('customers'); break;
+    case 'exportSalesBtn': exportSalesCsv(S.histPeriod || 'hoy'); break;
+    case 'csvApplyMerge': applyProductImport('merge'); break;
+    case 'csvApplyReplace':
+      confirmDialog('Se borrarán los productos actuales y quedarán solo los del archivo. ¿Continuar?',
+        () => applyProductImport('replace'), { confirmLabel: 'Reemplazar menú', danger: true });
+      break;
+
     case 'clearData':
       confirmDialog('¿Borrar TODAS las ventas? Esto no se puede deshacer.', () => {
         S.orders = []; saveOrders(); updateDayTotal(); updateActiveBadge(); toast('Ventas borradas');
@@ -2202,12 +2767,16 @@ document.addEventListener('input', (e) => {
   if (e.target.id === 'importFile') {
     if (e.target.files && e.target.files[0]) importData(e.target.files[0]);
   }
+  if (e.target.id === 'csvFile') {
+    if (e.target.files && e.target.files[0]) handleCsvFile(e.target.files[0]);
+  }
 });
 
 /* ============================================================
    INICIO
    ============================================================ */
 applyTheme();
+applyAppearance();
 applyBranding();
 updateManifest();
 updateDayTotal();
