@@ -256,6 +256,37 @@ function applyBranding() {
   if (logo) logo.innerHTML = S.settings.logo ? `<img src="${S.settings.logo}" alt="logo">` : icon('utensils', 17);
 }
 
+// Genera el manifest.webmanifest "al vuelo" con el nombre y logo del negocio,
+// para que al instalar la app en el teléfono/tablet use ese ícono y nombre
+// en vez del genérico. Solo tiene efecto la próxima vez que se instale
+// (una app ya instalada no cambia de ícono sola).
+let lastManifestUrl = null;
+function updateManifest() {
+  const name = S.settings.restaurantName || 'Punto de Venta';
+  const manifest = {
+    name,
+    short_name: name.slice(0, 14),
+    start_url: '.',
+    scope: '.',
+    display: 'standalone',
+    orientation: 'any',
+    background_color: '#f4f4f5',
+    theme_color: S.settings.primaryColor || '#e11d48',
+    icons: [
+      S.settings.logo
+        ? { src: S.settings.logo, sizes: '512x512', type: 'image/jpeg', purpose: 'any' }
+        : { src: 'icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' },
+    ],
+  };
+  const blob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
+  const url = URL.createObjectURL(blob);
+  let link = document.querySelector('link[rel="manifest"]');
+  if (!link) { link = document.createElement('link'); link.rel = 'manifest'; document.head.appendChild(link); }
+  link.href = url;
+  if (lastManifestUrl) URL.revokeObjectURL(lastManifestUrl);
+  lastManifestUrl = url;
+}
+
 /* ---------- Redimensionar imágenes (para no llenar el almacenamiento) ---------- */
 function resizeImage(file, maxSize, cb) {
   const reader = new FileReader();
@@ -939,6 +970,75 @@ function printTicket(o) {
   }
 }
 
+// Reporte de ventas imprimible (Hoy / Semana / Mes / Siempre), con el mismo
+// formato de ticket que las ventas individuales.
+function buildReportHtml(period) {
+  const { orders, total, avg, cash, transfer, nDom, discounts, top } = computePeriodStats(period);
+  const periodLabel = (PERIODS.find((p) => p.id === period) || {}).label || period;
+
+  const byDay = {};
+  orders.forEach((o) => { byDay[dayKey(o.date)] = (byDay[dayKey(o.date)] || 0) + o.total; });
+  const dayKeys = Object.keys(byDay).sort();
+  const perDayHtml = dayKeys.length > 1 ? `
+    <hr>
+    <div class="t-center t-big">VENTAS POR DÍA</div>
+    ${dayKeys.map((k) => {
+      const sample = orders.find((o) => dayKey(o.date) === k);
+      return `<div class="t-row"><span>${fmtDate(sample.date)}</span><span>${money(byDay[k])}</span></div>`;
+    }).join('')}` : '';
+
+  const topHtml = top.length ? `
+    <hr>
+    <div class="t-center t-big">MÁS VENDIDOS</div>
+    ${top.map(([name, c], i) => `<div class="t-row"><span>${i + 1}. ${escapeHtml(name)}</span><span>${c}</span></div>`).join('')}` : '';
+
+  const ordersHtml = orders.length ? `
+    <hr>
+    <div class="t-center t-big">PEDIDOS (${orders.length})</div>
+    ${orders.slice().reverse().map((o) => `<div class="t-row"><span>#${o.folio} · ${fmtTime(o.date)}</span><span>${money(o.total)}</span></div>`).join('')}` : '';
+
+  return `<div class="ticket">
+    ${S.settings.logo ? `<div class="t-center"><img src="${S.settings.logo}" style="max-width:130px;max-height:70px;object-fit:contain"></div>` : ''}
+    <div class="t-center t-big">${escapeHtml(S.settings.restaurantName || 'Restaurante')}</div>
+    ${S.settings.phone ? `<div class="t-center">Tel: ${escapeHtml(S.settings.phone)}</div>` : ''}
+    <hr>
+    <div class="t-center t-big">REPORTE DE VENTAS</div>
+    <div class="t-center">${escapeHtml(periodLabel)}</div>
+    <div class="t-center">Generado: ${fmtDate(Date.now())} ${fmtTime(Date.now())}</div>
+    <hr>
+    <div class="t-row"><span>Ventas totales</span><span>${money(total)}</span></div>
+    <div class="t-row"><span>Pedidos</span><span>${orders.length}</span></div>
+    <div class="t-row"><span>Ticket promedio</span><span>${money(avg)}</span></div>
+    <div class="t-row"><span>Efectivo</span><span>${money(cash)}</span></div>
+    <div class="t-row"><span>Transferencia/Tarjeta</span><span>${money(transfer)}</span></div>
+    <div class="t-row"><span>A domicilio</span><span>${nDom}</span></div>
+    ${discounts > 0 ? `<div class="t-row"><span>Descuentos otorgados</span><span>-${money(discounts)}</span></div>` : ''}
+    ${perDayHtml}
+    ${topHtml}
+    ${ordersHtml}
+    <hr>
+    <div class="t-center">Fin del reporte</div>
+  </div>`;
+}
+
+function printSalesReport() {
+  const period = S.histPeriod || 'hoy';
+  let area = $('#printArea');
+  if (!area) { area = document.createElement('div'); area.id = 'printArea'; document.body.appendChild(area); }
+  area.innerHTML = buildReportHtml(period);
+
+  const periodLabel = (PERIODS.find((p) => p.id === period) || {}).label || period;
+  const prevTitle = document.title;
+  document.title = `${S.settings.restaurantName || 'Reporte'} - Reporte ${periodLabel}`;
+  window.print();
+  setTimeout(() => { document.title = prevTitle; }, 500);
+
+  if (!DB.get('mv_printhint_shown', false)) {
+    DB.set('mv_printhint_shown', true);
+    toast('Tip: en "Más opciones" del cuadro de impresión, desactiva "Encabezados y pies" para un reporte más limpio');
+  }
+}
+
 // Mensaje corto avisando el avance del pedido (distinto del ticket completo).
 const STATUS_MESSAGES = {
   preparacion: 'Tu pedido está en preparación.',
@@ -1169,23 +1269,32 @@ function attachTrendInteractivity(points) {
   svg.addEventListener('touchend', hide);
 }
 
-function renderHistorial() {
-  const period = S.histPeriod || 'hoy';
+// Cálculos compartidos entre la vista de Historial y el reporte imprimible.
+function computePeriodStats(period) {
   const start = periodStart(period);
   const orders = S.orders.filter((o) => o.date >= start);
-
   const total = orders.reduce((s, o) => s + o.total, 0);
   const avg = orders.length ? total / orders.length : 0;
   const cash = orders.filter((o) => o.payment === 'efectivo').reduce((s, o) => s + o.total, 0);
   const transfer = total - cash;
   const nDom = orders.filter((o) => o.type === 'domicilio').length;
   const discounts = orders.reduce((s, o) => s + (o.discountAmount || 0), 0);
+  const counts = {};
+  orders.forEach((o) => o.items.forEach((i) => { counts[i.name] = (counts[i.name] || 0) + i.qty; }));
+  const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  return { period, start, orders, total, avg, cash, transfer, nDom, discounts, top };
+}
+
+function renderHistorial() {
+  const period = S.histPeriod || 'hoy';
+  const { start, orders, total, avg, cash, transfer, nDom, discounts, top } = computePeriodStats(period);
 
   // Selector de periodo + tarjetas de resumen
   $('#histSummary').innerHTML = `
     <div class="seg period-seg">
       ${PERIODS.map((p) => `<button data-period="${p.id}" class="${p.id === period ? 'active' : ''}">${p.label}</button>`).join('')}
     </div>
+    <button class="btn btn-block" id="printReportBtn" style="margin-bottom:14px">${icon('printer')} Imprimir reporte</button>
     <div class="stat-grid">
       <div class="stat-card"><div class="s-label">Ventas</div><div class="s-value">${money(total)}</div></div>
       <div class="stat-card"><div class="s-label">Pedidos</div><div class="s-value">${orders.length}</div></div>
@@ -1230,9 +1339,6 @@ function renderHistorial() {
   }
 
   // Gráfica: productos más vendidos en el periodo (etiqueta ancha para no truncar el nombre)
-  const counts = {};
-  orders.forEach((o) => o.items.forEach((i) => { counts[i.name] = (counts[i.name] || 0) + i.qty; }));
-  const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5);
   const maxCount = top.length ? top[0][1] : 1;
   const topChart = top.length ? `
     <div class="chart-card">
@@ -1686,6 +1792,7 @@ function saveSettingsForm() {
   saveSettings();
   applyTheme();
   applyBranding();
+  updateManifest();
   updateDayTotal();
   toast('Ajustes guardados');
 }
@@ -1822,6 +1929,7 @@ function finishOnboarding(skip) {
   saveSettings();
   applyTheme();
   applyBranding();
+  updateManifest();
   $('#onboarding').hidden = true;
   switchView('vender');
   if (!skip) toast('¡Listo! Ya puedes vender');
@@ -2003,6 +2111,7 @@ document.addEventListener('click', (e) => {
     case 'backToCart': captureCheckoutInputs(); closeModal(); renderPOS(); break;
     case 'confirmSale': confirmSale(); break;
     case 'printTicket': printTicket(order()); break;
+    case 'printReportBtn': printSalesReport(); break;
     case 'waTicket': whatsappTicket(order()); break;
     case 'deleteOrder': {
       const orderId = modalEl.dataset.orderId;
@@ -2014,7 +2123,7 @@ document.addEventListener('click', (e) => {
       break;
     }
     case 'pickLogo': $('#logoFile').click(); break;
-    case 'removeLogo': S.settings.logo = ''; saveSettings(); applyBranding(); renderSettings(); break;
+    case 'removeLogo': S.settings.logo = ''; saveSettings(); applyBranding(); updateManifest(); renderSettings(); break;
     case 'openCustomers': openCustomersList(); break;
     case 'addCustomerBtn': openCustomerEditForm(null); break;
     case 'saveCustomerEdit': saveCustomerEdit(); break;
@@ -2074,7 +2183,7 @@ document.addEventListener('input', (e) => {
   }
   if (e.target.id === 'logoFile') {
     const f = e.target.files && e.target.files[0];
-    if (f) resizeImage(f, 240, (d) => { S.settings.logo = d; if (saveSettings() !== false) { applyBranding(); renderSettings(); toast('Logo actualizado'); } });
+    if (f) resizeImage(f, 240, (d) => { S.settings.logo = d; if (saveSettings() !== false) { applyBranding(); updateManifest(); renderSettings(); toast('Logo actualizado'); } });
   }
 });
 
@@ -2100,6 +2209,7 @@ document.addEventListener('input', (e) => {
    ============================================================ */
 applyTheme();
 applyBranding();
+updateManifest();
 updateDayTotal();
 updateActiveBadge();
 switchView('vender');
