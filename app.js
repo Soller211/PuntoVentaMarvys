@@ -91,6 +91,7 @@ const DEFAULT_SETTINGS = {
   categoryColors: {},
 };
 const COLOR_PRESETS = ['#e11d48', '#ea580c', '#d97706', '#16a34a', '#0891b2', '#2563eb', '#7c3aed', '#db2777', '#0f172a'];
+const CURRENCY_OPTIONS = ['$', 'US$', '€', 'Bs', 'S/', 'Q', 'L', 'C$', '₡', 'Gs', 'B/.', '£'];
 const SAMPLE_PRODUCTS = [
   { id: uid(), name: 'Hamburguesa', price: 95, category: 'Platillos', active: true },
   { id: uid(), name: 'Torta especial', price: 75, category: 'Platillos', active: true },
@@ -576,7 +577,11 @@ function openCheckout() {
   const currency = S.settings.currency || '$';
 
   const customerFields = checkout.type === 'domicilio' ? `
-    <div class="field"><label>Nombre del cliente</label><input id="cName" placeholder="Ej. Juan Pérez" value="${escapeHtml(checkout.cName || '')}"></div>
+    <div class="field autocomplete-wrap">
+      <label>Nombre del cliente</label>
+      <input id="cName" placeholder="Ej. Juan Pérez" value="${escapeHtml(checkout.cName || '')}" autocomplete="off">
+      <div class="autocomplete-list" id="nameSuggestions" hidden></div>
+    </div>
     <div class="field autocomplete-wrap">
       <label>Teléfono</label>
       <input id="cPhone" type="tel" inputmode="tel" placeholder="10 dígitos" value="${escapeHtml(checkout.cPhone || '')}" autocomplete="off">
@@ -697,6 +702,19 @@ function renderPhoneSuggestions(query) {
     </div>`).join('');
   box.hidden = false;
 }
+function renderNameSuggestions(query) {
+  const box = $('#nameSuggestions');
+  if (!box) return;
+  const q = query.trim().toLowerCase();
+  const matches = q ? S.customers.filter((c) => (c.name || '').toLowerCase().includes(q)).slice(0, 6) : [];
+  if (!matches.length) { box.hidden = true; box.innerHTML = ''; return; }
+  box.innerHTML = matches.map((c) => `
+    <div class="autocomplete-item" data-pickcustomer="${c.id}">
+      <div class="ac-name">${escapeHtml(c.name || 'Sin nombre')}</div>
+      <div class="ac-sub">${escapeHtml(c.phone)}${c.address ? ' · ' + escapeHtml(c.address) : ''}</div>
+    </div>`).join('');
+  box.hidden = false;
+}
 function renderCompanySuggestions(query) {
   const box = $('#companySuggestions');
   if (!box) return;
@@ -711,15 +729,17 @@ function renderCompanySuggestions(query) {
   box.hidden = false;
 }
 function pickCustomerSuggestion(c) {
+  const nameEl = $('#cName');
+  if (nameEl) { nameEl.value = c.name || ''; checkout.cName = c.name || ''; }
   const phoneEl = $('#cPhone');
   if (phoneEl) { phoneEl.value = c.phone; checkout.cPhone = c.phone; }
-  const nameEl = $('#cName');
-  if (nameEl && !nameEl.value.trim() && c.name) { nameEl.value = c.name; checkout.cName = c.name; }
   const addrEl = $('#cAddress');
   if (addrEl && !addrEl.value.trim() && c.address) { addrEl.value = c.address; checkout.cAddress = c.address; }
   const coEl = $('#cCompany');
   if (coEl && !coEl.value.trim() && c.company) { coEl.value = c.company; checkout.cCompany = c.company; }
-  const box = $('#phoneSuggestions'); if (box) { box.hidden = true; box.innerHTML = ''; }
+  ['#phoneSuggestions', '#nameSuggestions'].forEach((sel) => {
+    const box = $(sel); if (box) { box.hidden = true; box.innerHTML = ''; }
+  });
 }
 function pickCompanySuggestion(co) {
   const companyEl = $('#cCompany') || $('#custCompany');
@@ -1623,7 +1643,13 @@ function renderSettings() {
     <div class="field"><label>Nombre del negocio</label><input id="setName" value="${escapeHtml(s.restaurantName)}"></div>
     <div class="field"><label>Teléfono</label><input id="setPhone" type="tel" value="${escapeHtml(s.phone)}"></div>
     <div class="field"><label>Dirección</label><input id="setAddress" value="${escapeHtml(s.address)}"></div>
-    <div class="field"><label>Símbolo de moneda</label><input id="setCurrency" maxlength="3" value="${escapeHtml(s.currency)}" style="max-width:100px"></div>
+    <div class="field">
+      <label>Símbolo de moneda</label>
+      <select id="setCurrency" style="max-width:140px">
+        ${CURRENCY_OPTIONS.map((c) => `<option value="${c}" ${c === s.currency ? 'selected' : ''}>${c}</option>`).join('')}
+        ${CURRENCY_OPTIONS.includes(s.currency) ? '' : `<option value="${escapeHtml(s.currency)}" selected>${escapeHtml(s.currency)}</option>`}
+      </select>
+    </div>
     <div class="field"><label>Costo de envío por defecto</label><input id="setFee" type="text" inputmode="decimal" value="${s.defaultDeliveryFee}"><span class="field-hint">Se puede cambiar en cada pedido a domicilio.</span></div>
     <div class="field">
       <label>Color del negocio</label>
@@ -2061,6 +2087,7 @@ document.addEventListener('input', (e) => {
   if (e.target.id === 'cPhone' || e.target.id === 'setPhone' || e.target.id === 'custPhone') {
     filterDigitsInput(e.target);
   }
+  if (e.target.id === 'cName') renderNameSuggestions(e.target.value);
   if (e.target.id === 'cPhone') renderPhoneSuggestions(e.target.value);
   if (e.target.id === 'cCompany' || e.target.id === 'custCompany') renderCompanySuggestions(e.target.value);
   if (e.target.id === 'importFile') {
