@@ -36,6 +36,39 @@ const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); retur
 const dayKey = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
 const fmtDate = (ts) => new Date(ts).toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 const fmtTime = (ts) => new Date(ts).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+/* ---------- Hora de entrega prometida ----------
+   Es la hora a la que se le dijo al cliente que tendría su pedido. Se guarda
+   como fecha completa (no como texto) para poder calcular si ya va tarde. */
+// "15:30" -> hora de hoy. Si esa hora ya pasó hace rato, se entiende que es
+// de mañana: pasa con los pedidos que se toman cerca de la medianoche.
+function parseDeliveryTime(hhmm, base = Date.now()) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm == null ? '' : hhmm).trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  const d = new Date(base);
+  d.setHours(h, min, 0, 0);
+  let ts = d.getTime();
+  if (ts < base - 2 * 3600000) ts += 864e5;
+  return ts;
+}
+// Fecha -> "15:30", que es lo que espera un <input type="time">
+function timeInputValue(ts) {
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+// "en 15 min" / "tarde 5 min", para saber de un vistazo qué pedido urge.
+function deliveryCountdown(ts, now = Date.now()) {
+  const min = Math.round((ts - now) / 60000);
+  if (min < 0) return { late: true, text: `tarde ${-min} min` };
+  if (min === 0) return { late: false, text: 'ahora' };
+  if (min < 60) return { late: false, text: `en ${min} min` };
+  const h = Math.floor(min / 60);
+  const r = min % 60;
+  return { late: false, text: `en ${h} h${r ? ` ${r} min` : ''}` };
+}
+
 function minsAgo(ts) {
   const m = Math.round((Date.now() - ts) / 60000);
   if (m < 1) return 'ahora';
@@ -89,6 +122,7 @@ const DEFAULT_SETTINGS = {
   nextFolio: 1,
   categories: ['Platillos', 'Entradas', 'Bebidas', 'Postres'],
   categoryColors: {},
+  includeDelivery: true,    // si los reportes cuentan el envío como venta
   fontScale: 1,             // tamaño de la letra de la app (ver FONT_SCALES)
   ticketSize: 14,           // tamaño de la letra del ticket, en px
   ticketWeight: 'gruesa',   // grosor de la letra del ticket (ver TICKET_WEIGHTS)
@@ -526,7 +560,7 @@ function catColor(cat) {
   return CAT_COLORS[(i < 0 ? 0 : i) % CAT_COLORS.length];
 }
 
-let checkout = { type: 'domicilio', payment: 'efectivo', deliveryFee: 0, cash: '', discountType: 'percent', discountValue: '', cCompany: '' };
+let checkout = { type: 'domicilio', payment: 'efectivo', deliveryFee: 0, cash: '', discountType: 'percent', discountValue: '', cCompany: '', cTime: '' };
 
 function renderPOS() {
   $('#brandName').textContent = S.settings.restaurantName || 'Punto de Venta';
@@ -858,6 +892,27 @@ function closeSheet() {
 }
 
 /* ---------- Modal de cobro ---------- */
+// Campo de hora de entrega, con atajos para no teclear en plena hora pico.
+const ETA_SHORTCUTS = [15, 20, 30, 45, 60];
+function deliveryTimeField() {
+  const actual = checkout.cTime || '';
+  const ts = parseDeliveryTime(actual);
+  return `
+    <div class="field">
+      <label>${icon('clock', 15)} Hora de entrega (opcional)</label>
+      <div class="eta-row">
+        <input id="cTime" type="time" value="${escapeHtml(actual)}">
+        ${actual ? `<button type="button" class="btn btn-ghost" data-eta="limpiar">Quitar</button>` : ''}
+      </div>
+      <div class="eta-chips">
+        ${ETA_SHORTCUTS.map((m) => `<button type="button" class="cat-chip" data-eta="${m}">+${m} min</button>`).join('')}
+      </div>
+      <span class="field-hint">${ts
+        ? `Se le dirá al cliente que lo tiene a las ${fmtTime(ts)} (${deliveryCountdown(ts).text}).`
+        : 'Aparece en el ticket y en el mensaje de WhatsApp.'}</span>
+    </div>`;
+}
+
 function openCheckout() {
   const { subtotal, fee, discountAmount, total } = computeTotals();
   const cashNum = parseNum(checkout.cash);
@@ -884,9 +939,11 @@ function openCheckout() {
     </div>
     <div class="field"><label>Dirección de entrega</label><textarea id="cAddress" rows="2" placeholder="Calle, número, colonia, referencias">${escapeHtml(checkout.cAddress || '')}</textarea></div>
     <div class="field"><label>Costo de envío</label><input id="cFee" type="text" inputmode="decimal" value="${checkout.deliveryFee}"></div>
+    ${deliveryTimeField()}
     <div class="field"><label>Notas del pedido (opcional)</label><input id="cNotes" placeholder="Ej. sin cebolla" value="${escapeHtml(checkout.cNotes || '')}"></div>
   ` : `
     <div class="field"><label>Nombre (opcional)</label><input id="cName" placeholder="Para identificar el pedido" value="${escapeHtml(checkout.cName || '')}"></div>
+    ${deliveryTimeField()}
     <div class="field"><label>Notas (opcional)</label><input id="cNotes" placeholder="Ej. sin picante" value="${escapeHtml(checkout.cNotes || '')}"></div>
   `;
 
@@ -971,6 +1028,7 @@ function captureCheckoutInputs() {
   if (g('cAddress') !== undefined) checkout.cAddress = g('cAddress');
   if (g('cCompany') !== undefined) checkout.cCompany = g('cCompany');
   if (g('cNotes') !== undefined) checkout.cNotes = g('cNotes');
+  if (g('cTime') !== undefined) checkout.cTime = g('cTime');
   if (g('cFee') !== undefined) checkout.deliveryFee = parseNum(g('cFee'));
   if (g('cCash') !== undefined) checkout.cash = g('cCash');
   if (g('cDiscount') !== undefined) checkout.discountValue = g('cDiscount');
@@ -1085,6 +1143,7 @@ function finalizeSale({ subtotal, deliveryFee, discountAmount, total, cashNum })
       notes: checkout.cNotes || '',
       company: checkout.cCompany || '',
     },
+    deliveryAt: parseDeliveryTime(checkout.cTime),
     subtotal,
     discountType: checkout.discountType,
     discountValue: parseNum(checkout.discountValue),
@@ -1105,7 +1164,7 @@ function finalizeSale({ subtotal, deliveryFee, discountAmount, total, cashNum })
 
   // Limpiar carrito y datos de cobro
   S.cart = [];
-  checkout = { type: 'domicilio', payment: 'efectivo', deliveryFee: 0, cash: '', discountType: 'percent', discountValue: '', cCompany: '' };
+  checkout = { type: 'domicilio', payment: 'efectivo', deliveryFee: 0, cash: '', discountType: 'percent', discountValue: '', cCompany: '', cTime: '' };
 
   updateDayTotal();
   closeSheet();
@@ -1234,6 +1293,7 @@ function ticketHtml(o) {
     <div class="t-row"><span>Folio #${o.folio}</span><span>${fmtTime(o.date)}</span></div>
     <div>${fmtDate(o.date)}</div>
     <div class="t-order-type">${o.type === 'domicilio' ? 'Pedido a domicilio' : 'Pedido para llevar'}</div>
+    ${o.deliveryAt ? `<div class="t-order-type">${o.type === 'domicilio' ? 'Entrega' : 'Listo'}: ${fmtTime(o.deliveryAt)}</div>` : ''}
     <hr>
     ${lines}
     <hr>
@@ -1287,11 +1347,11 @@ function printTicket(o) {
 // Reporte de ventas imprimible (Hoy / Semana / Mes / Siempre), con el mismo
 // formato de ticket que las ventas individuales.
 function buildReportHtml(period) {
-  const { orders, total, avg, cash, transfer, nDom, discounts, top } = computePeriodStats(period);
+  const { orders, total, avg, cash, transfer, nDom, discounts, delivery, top, conEnvio, monto } = computePeriodStats(period);
   const periodLabel = (PERIODS.find((p) => p.id === period) || {}).label || period;
 
   const byDay = {};
-  orders.forEach((o) => { byDay[dayKey(o.date)] = (byDay[dayKey(o.date)] || 0) + o.total; });
+  orders.forEach((o) => { byDay[dayKey(o.date)] = (byDay[dayKey(o.date)] || 0) + monto(o); });
   const dayKeys = Object.keys(byDay).sort();
   const perDayHtml = dayKeys.length > 1 ? `
     <hr>
@@ -1309,7 +1369,7 @@ function buildReportHtml(period) {
   const ordersHtml = orders.length ? `
     <hr>
     <div class="t-center t-big">PEDIDOS (${orders.length})</div>
-    ${orders.slice().reverse().map((o) => `<div class="t-row"><span>#${o.folio} · ${fmtTime(o.date)}</span><span>${money(o.total)}</span></div>`).join('')}` : '';
+    ${orders.slice().reverse().map((o) => `<div class="t-row"><span>#${o.folio} · ${fmtTime(o.date)}</span><span>${money(monto(o))}</span></div>`).join('')}` : '';
 
   return `<div class="ticket">
     ${S.settings.logo ? `<div class="t-center"><img src="${S.settings.logo}" style="max-width:130px;max-height:70px;object-fit:contain"></div>` : ''}
@@ -1318,6 +1378,7 @@ function buildReportHtml(period) {
     <hr>
     <div class="t-center t-big">REPORTE DE VENTAS</div>
     <div class="t-center">${escapeHtml(periodLabel)}</div>
+    <div class="t-center t-order-type">${conEnvio ? 'CON ENVÍOS' : 'SIN ENVÍOS'}</div>
     <div class="t-center">Generado: ${fmtDate(Date.now())} ${fmtTime(Date.now())}</div>
     <hr>
     <div class="t-row"><span>Ventas totales</span><span>${money(total)}</span></div>
@@ -1327,6 +1388,10 @@ function buildReportHtml(period) {
     <div class="t-row"><span>Transferencia/Tarjeta</span><span>${money(transfer)}</span></div>
     <div class="t-row"><span>A domicilio</span><span>${nDom}</span></div>
     ${discounts > 0 ? `<div class="t-row"><span>Descuentos otorgados</span><span>-${money(discounts)}</span></div>` : ''}
+    ${delivery > 0 ? `
+      <hr>
+      <div class="t-row"><span>Envíos cobrados</span><span>${money(delivery)}</span></div>
+      <div class="t-item-note">${conEnvio ? 'Incluidos arriba. Este monto es de los repartidores.' : 'Ya descontados del total. A pagar a los repartidores.'}</div>` : ''}
     ${perDayHtml}
     ${topHtml}
     ${ordersHtml}
@@ -1362,7 +1427,10 @@ const STATUS_MESSAGES = {
 };
 function whatsappStatusUpdate(o) {
   const msg = STATUS_MESSAGES[o.status || 'preparacion'];
-  const text = encodeURIComponent(`*${S.settings.restaurantName || 'Restaurante'}*\n${msg}`);
+  // Si hay hora prometida y el pedido sigue en curso, se le recuerda al cliente.
+  const extra = o.deliveryAt && (o.status || 'preparacion') !== 'entregado'
+    ? `\nHora aprox: ${fmtTime(o.deliveryAt)}` : '';
+  const text = encodeURIComponent(`*${S.settings.restaurantName || 'Restaurante'}*\n${msg}${extra}`);
   const phone = (o.customer.phone || '').replace(/\D/g, '');
   if (!phone) toast('Sin teléfono guardado: elige el contacto en WhatsApp');
   const url = phone ? `https://wa.me/${phone}?text=${text}` : `https://wa.me/?text=${text}`;
@@ -1373,6 +1441,7 @@ function whatsappTicket(o) {
   const L = [];
   L.push(`*${S.settings.restaurantName || 'Restaurante'}*`);
   L.push(o.type === 'domicilio' ? 'Pedido a domicilio' : 'Pedido para llevar');
+  if (o.deliveryAt) L.push(o.type === 'domicilio' ? `Entrega aprox: ${fmtTime(o.deliveryAt)}` : `Listo aprox: ${fmtTime(o.deliveryAt)}`);
   L.push('');
   o.items.forEach((i) => {
     L.push(`${i.qty}x ${i.name} — ${money(i.price * i.qty)}`);
@@ -1408,7 +1477,7 @@ function whatsappTicket(o) {
    ============================================================ */
 function updateDayTotal() {
   const start = startOfToday();
-  const total = S.orders.filter((o) => o.date >= start).reduce((s, o) => s + o.total, 0);
+  const total = S.orders.filter((o) => o.date >= start).reduce((s, o) => s + orderAmount(o), 0);
   $('#dayTotal').textContent = 'Hoy: ' + money(total);
 }
 
@@ -1470,6 +1539,10 @@ function renderPedidos() {
         </div>
         <div class="pc-items">${itemsTxt}</div>
         ${dom && o.customer.address ? `<div class="pc-addr">${icon('mapPin',14)} ${escapeHtml(o.customer.address)}${o.customer.name ? ' · ' + escapeHtml(o.customer.name) : ''}</div>` : ''}
+        ${o.deliveryAt ? (() => {
+          const c = deliveryCountdown(o.deliveryAt);
+          return `<div class="pc-eta ${c.late ? 'late' : ''}">${icon('clock',14)} Entregar ${fmtTime(o.deliveryAt)} · ${c.text}</div>`;
+        })() : ''}
         <div class="pc-meta">
           <span>${money(o.total)} · ${o.payment === 'efectivo' ? icon('cash',13) + ' Efectivo' : icon('card',13) + ' Transf.'}</span>
           <span>${minsAgo(o.date)}</span>
@@ -1590,31 +1663,62 @@ function attachTrendInteractivity(points) {
   svg.addEventListener('touchend', hide);
 }
 
+/* ---------- Ventas con o sin envío ----------
+   El costo de envío entra en el total del pedido, pero ese dinero no es del
+   negocio: se le paga al repartidor. Para ver cuánto se vendió de verdad hay
+   que descontarlo. El modo elegido se guarda y manda en el Historial, en el
+   reporte impreso y en el total del encabezado, para que no salgan dos
+   números distintos del mismo día en pantallas distintas. */
+const includeDelivery = () => S.settings.includeDelivery !== false;
+const orderDelivery = (o) => Number(o.deliveryFee) || 0;
+// Lo que cuenta como venta según el modo elegido.
+const orderAmount = (o, conEnvio = includeDelivery()) => o.total - (conEnvio ? 0 : orderDelivery(o));
+
+function setIncludeDelivery(valor) {
+  S.settings.includeDelivery = !!valor;
+  saveSettings();
+  updateDayTotal();
+  renderHistorial();
+}
+
 // Cálculos compartidos entre la vista de Historial y el reporte imprimible.
-function computePeriodStats(period) {
+function computePeriodStats(period, conEnvio = includeDelivery()) {
   const start = periodStart(period);
   const orders = S.orders.filter((o) => o.date >= start);
-  const total = orders.reduce((s, o) => s + o.total, 0);
+  const monto = (o) => orderAmount(o, conEnvio);
+  const total = orders.reduce((s, o) => s + monto(o), 0);
   const avg = orders.length ? total / orders.length : 0;
-  const cash = orders.filter((o) => o.payment === 'efectivo').reduce((s, o) => s + o.total, 0);
+  const cash = orders.filter((o) => o.payment === 'efectivo').reduce((s, o) => s + monto(o), 0);
   const transfer = total - cash;
   const nDom = orders.filter((o) => o.type === 'domicilio').length;
   const discounts = orders.reduce((s, o) => s + (o.discountAmount || 0), 0);
+  // Cuánto se juntó de envíos: es justo lo que hay que entregarle a los repartidores.
+  const delivery = orders.reduce((s, o) => s + orderDelivery(o), 0);
   const counts = {};
   orders.forEach((o) => o.items.forEach((i) => { counts[i.name] = (counts[i.name] || 0) + i.qty; }));
   const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  return { period, start, orders, total, avg, cash, transfer, nDom, discounts, top };
+  return { period, start, orders, total, avg, cash, transfer, nDom, discounts, delivery, top, conEnvio, monto };
 }
 
 function renderHistorial() {
   const period = S.histPeriod || 'hoy';
-  const { start, orders, total, avg, cash, transfer, nDom, discounts, top } = computePeriodStats(period);
+  const conEnvio = includeDelivery();
+  const { start, orders, total, avg, cash, transfer, nDom, discounts, delivery, top, monto } = computePeriodStats(period);
 
   // Selector de periodo + tarjetas de resumen
   $('#histSummary').innerHTML = `
     <div class="seg period-seg">
       ${PERIODS.map((p) => `<button data-period="${p.id}" class="${p.id === period ? 'active' : ''}">${p.label}</button>`).join('')}
     </div>
+    <div class="seg period-seg">
+      <button data-envio="1" class="${conEnvio ? 'active' : ''}">Con envío</button>
+      <button data-envio="0" class="${conEnvio ? '' : 'active'}">Sin envío</button>
+    </div>
+    <p class="field-hint" style="margin:-8px 0 14px">
+      ${conEnvio
+        ? 'Los totales incluyen el costo de envío que cobraste.'
+        : 'Los totales son solo tu venta: el envío se descuenta porque ese dinero es del repartidor.'}
+    </p>
     <div class="quick-buttons" style="margin-bottom:14px">
       <button class="btn" id="printReportBtn">${icon('printer')} Imprimir reporte</button>
       <button class="btn" id="exportSalesBtn">${icon('download')} Exportar a Excel</button>
@@ -1626,6 +1730,7 @@ function renderHistorial() {
       <div class="stat-card"><div class="s-label">${icon('cash')} Efectivo</div><div class="s-value">${money(cash)}</div></div>
       <div class="stat-card"><div class="s-label">${icon('card')} Transf./Tarjeta</div><div class="s-value">${money(transfer)}</div></div>
       <div class="stat-card"><div class="s-label">${icon('truck')} A domicilio</div><div class="s-value">${nDom}</div></div>
+      ${delivery > 0 ? `<div class="stat-card"><div class="s-label">${icon('truck')} Envíos ${conEnvio ? '(incluidos)' : '(a repartidores)'}</div><div class="s-value">${money(delivery)}</div></div>` : ''}
       ${discounts > 0 ? `<div class="stat-card"><div class="s-label">${icon('tag')} Descuentos</div><div class="s-value">${money(discounts)}</div></div>` : ''}
     </div>
   `;
@@ -1643,7 +1748,7 @@ function renderHistorial() {
       orders.forEach((o) => {
         const d = new Date(o.date);
         const key = `${d.getFullYear()}-${d.getMonth()}`;
-        byMonth[key] = (byMonth[key] || 0) + o.total;
+        byMonth[key] = (byMonth[key] || 0) + monto(o);
       });
       const monthKeys = Object.keys(byMonth).sort();
       trendPoints = monthKeys.map((k) => {
@@ -1656,7 +1761,7 @@ function renderHistorial() {
       for (let d = startOfToday(); d >= from; d -= 864e5) days.unshift(d);
       trendPoints = days.map((d) => ({
         label: new Date(d).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric' }),
-        value: orders.filter((o) => dayKey(o.date) === dayKey(d)).reduce((s, o) => s + o.total, 0),
+        value: orders.filter((o) => dayKey(o.date) === dayKey(d)).reduce((s, o) => s + monto(o), 0),
       }));
       salesChart = buildTrendChart(trendPoints, 'Ventas por día');
     }
@@ -1690,7 +1795,7 @@ function renderHistorial() {
       const k = dayKey(o.date);
       if (k !== lastDay) {
         lastDay = k;
-        const dayTotal = orders.filter((x) => dayKey(x.date) === k).reduce((s, x) => s + x.total, 0);
+        const dayTotal = orders.filter((x) => dayKey(x.date) === k).reduce((s, x) => s + monto(x), 0);
         listHtml += `<div class="hist-day-title">${fmtDate(o.date)} · ${money(dayTotal)}</div>`;
       }
       listHtml += `
@@ -1704,7 +1809,7 @@ function renderHistorial() {
             </div>
             <div class="o-meta">${fmtTime(o.date)} · ${o.items.reduce((s, i) => s + i.qty, 0)} art.${o.customer.name ? ' · ' + escapeHtml(o.customer.name) : ''}</div>
           </div>
-          <div class="o-total">${money(o.total)}</div>
+          <div class="o-total">${money(monto(o))}</div>
         </div>`;
     });
   }
@@ -2655,22 +2760,27 @@ function applyProductImport(mode) {
 function exportSalesCsv(period) {
   const { orders } = computePeriodStats(period);
   if (!orders.length) { toast('No hay ventas en ese periodo'); return; }
-  const headers = ['Folio', 'Fecha', 'Hora', 'Tipo', 'Estado', 'Cliente', 'Telefono', 'Empresa',
-    'Direccion', 'Productos', 'Subtotal', 'Descuento', 'Envio', 'Total', 'Pago'];
+  const headers = ['Folio', 'Fecha', 'Hora', 'Hora entrega', 'Tipo', 'Estado', 'Cliente', 'Telefono', 'Empresa',
+    'Direccion', 'Productos', 'Subtotal', 'Descuento', 'Envio', 'Total', 'Total sin envio', 'Pago'];
   const rows = orders.slice().sort((a, b) => a.date - b.date).map((o) => {
     const c = o.customer || {};
     return [
       o.folio,
       new Date(o.date).toLocaleDateString('es-MX'),
       fmtTime(o.date),
+      o.deliveryAt ? fmtTime(o.deliveryAt) : '',
       o.type === 'domicilio' ? 'Domicilio' : 'Para llevar',
       (STATUS[o.status || 'entregado'] || {}).label || '',
       c.name || '', c.phone || '', c.company || '', c.address || '',
-      o.items.map((i) => `${i.qty}x ${i.name}${i.notes ? ` (${i.notes})` : ''}`).join(', '),
+      o.items.map((i) => {
+        const ops = (i.options || []).map((op) => op.name).join(' + ');
+        return `${i.qty}x ${i.name}${ops ? ` [${ops}]` : ''}${i.notes ? ` (${i.notes})` : ''}`;
+      }).join(', '),
       csvNumber(o.subtotal),
       csvNumber(o.discountAmount || 0),
       csvNumber(o.deliveryFee || 0),
       csvNumber(o.total),
+      csvNumber(o.total - orderDelivery(o)), // lo que te queda a ti
       o.payment === 'efectivo' ? 'Efectivo' : 'Transferencia/Tarjeta',
     ];
   });
@@ -2887,7 +2997,7 @@ function switchView(view) {
    EVENTOS (delegación desde el documento)
    ============================================================ */
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-view],[data-add],[data-cat],[data-close],[data-qty],[data-removeitem],[data-itemnote],[data-order],[data-toggle],[data-edit],[data-delete],[data-type],[data-pay],[data-disctype],[data-clearcart],[data-closesheet],[data-color],[data-period],[data-advance],[data-revert],[data-wapp],[data-ob],[data-obcolor],[data-obsample],[data-editcustomer],[data-deletecustomer],[data-editcatcolor],[data-catcolor],[data-editcompany],[data-deletecompany],[data-pickcustomer],[data-pickcompany],[data-openentity],[data-choice],[data-options],[data-opt],[data-fontscale],[data-ticketsize],[data-ticketweight]');
+  const t = e.target.closest('[data-view],[data-add],[data-cat],[data-close],[data-qty],[data-removeitem],[data-itemnote],[data-order],[data-toggle],[data-edit],[data-delete],[data-type],[data-pay],[data-disctype],[data-clearcart],[data-closesheet],[data-color],[data-period],[data-envio],[data-eta],[data-advance],[data-revert],[data-wapp],[data-ob],[data-obcolor],[data-obsample],[data-editcustomer],[data-deletecustomer],[data-editcatcolor],[data-catcolor],[data-editcompany],[data-deletecompany],[data-pickcustomer],[data-pickcompany],[data-openentity],[data-choice],[data-options],[data-opt],[data-fontscale],[data-ticketsize],[data-ticketweight]');
 
   // Navegación
   const nav = e.target.closest('.nav-btn');
@@ -2956,6 +3066,13 @@ document.addEventListener('click', (e) => {
 
   // Historial: filtro de periodo
   if (t.dataset.period) { S.histPeriod = t.dataset.period; renderHistorial(); return; }
+  if (t.dataset.envio) { setIncludeDelivery(t.dataset.envio === '1'); return; }
+  if (t.dataset.eta) {
+    captureCheckoutInputs();
+    checkout.cTime = t.dataset.eta === 'limpiar' ? '' : timeInputValue(Date.now() + Number(t.dataset.eta) * 60000);
+    openCheckout();
+    return;
+  }
 
   // Pedidos: avanzar estado de entrega
   if (t.dataset.advance) {

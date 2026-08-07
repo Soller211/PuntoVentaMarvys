@@ -363,6 +363,17 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .pc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pc-items { font-size: .92rem; line-height: 1.4; }
 .pc-addr { font-size: .85rem; color: var(--text-muted); display: flex; align-items: center; gap: 5px; }
+/* Hora prometida de entrega. Se pone en rojo cuando ya se pasó, para que
+   salte a la vista cuál pedido urge. */
+.pc-eta {
+  display: inline-flex; align-items: center; gap: 6px;
+  align-self: flex-start;
+  font-size: .85rem; font-weight: 700;
+  color: var(--info);
+  background: rgba(37, 99, 235, .1);
+  padding: 5px 10px; border-radius: 999px;
+}
+.pc-eta.late { color: var(--primary-dark); background: var(--primary-soft); }
 .pc-meta { display: flex; justify-content: space-between; font-size: .82rem; color: var(--text-muted); font-weight: 600; }
 .pc-meta span { display: inline-flex; align-items: center; gap: 4px; }
 
@@ -843,6 +854,13 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .discount-row input { flex: 1; }
 .seg-mini { flex: 0 0 88px; }
 .seg-mini button { padding: 12px 4px; font-size: .9rem; }
+
+/* Hora de entrega en el cobro: campo + atajos rápidos */
+.eta-row { display: flex; gap: 8px; align-items: center; }
+.eta-row input[type="time"] { flex: 1 1 auto; min-width: 0; }
+.eta-row .btn { flex: none; }
+.eta-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.eta-chips .cat-chip { font-size: .85rem; padding: 7px 13px; }
 
 .change-box { background: var(--success-soft); color: var(--success); border-radius: var(--radius-sm); padding: 12px 14px; font-weight: 700; text-align: center; margin-top: 8px; }
 .change-box.neg { background: var(--primary-soft); color: var(--primary-dark); }
