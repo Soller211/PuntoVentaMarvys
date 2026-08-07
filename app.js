@@ -237,30 +237,59 @@ function saveSettings() {
 /* ============================================================
    LICENCIA (prueba gratis + código de activación)
 
-   Este mismo código y clave están en generate-license.js — deben
-   coincidir exactamente para que los códigos generados sean válidos
-   aquí. CAMBIA LICENSE_SALT por tu propio secreto antes de vender,
-   y actualiza el mismo valor en generate-license.js.
+   La cuenta que valida los códigos vive en license-core.js, un solo
+   archivo que comparten esta app y generate-license.js. Aquí solo se
+   decide QUÉ hacer con el resultado.
+
+   Cada instalación genera su propio ID (mv_install_id) y el código que
+   le mandas al cliente queda amarrado a ese ID: no sirve en otra
+   computadora. Hay dos planes:
+     - pago único:  no vence
+     - temporal:    vence en la fecha que trae el código adentro
+   Todo se revisa aquí mismo, sin internet.
    ============================================================ */
-// Interruptor maestro: en false, nadie ve avisos de prueba/activación (uso familiar/interno).
-// Cámbialo a true cuando quieras empezar a vender a otros negocios.
-const LICENSE_ENFORCED = false;
-const LICENSE_SALT = 'MARVYS-CAMBIA-ESTA-CLAVE-2026';
+// La versión de escritorio (el .exe que vendes) pide licencia; la versión
+// web queda libre como demostración. Para cobrar también la web, cambia
+// LICENSE_ENFORCED por `true`.
+const IS_DESKTOP = /Electron/i.test(navigator.userAgent || '');
+
+// Atajo para probar el cobro en el navegador sin tener que compilar el .exe:
+// abre la app con  ?licencia=1  para encenderlo y con  ?licencia=0  para
+// apagarlo. La preferencia se guarda, así que basta hacerlo una vez.
+// Solo puede ENCENDER el cobro donde estaba apagado; en el .exe siempre se
+// pide licencia, sin importar lo que diga la URL.
+(function atajoDePrueba() {
+  try {
+    const v = new URLSearchParams(location.search).get('licencia');
+    if (v === '1' || v === '0') DB.set('mv_force_license', v === '1');
+  } catch (_) { /* si no hay URL utilizable, se ignora */ }
+})();
+
+const LICENSE_ENFORCED = IS_DESKTOP || DB.get('mv_force_license', false) === true;
 const TRIAL_LIMIT = 20; // ventas gratis antes de pedir activación
 const SELLER_WHATSAPP = ''; // tu número con código de país, ej. "5218112345678"
 
-function licenseChecksum(part1, part2) {
-  const str = part1 + part2 + LICENSE_SALT;
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
-  return hash.toString(36).toUpperCase().padStart(4, '0').slice(-4);
+// ID de esta instalación. Se crea una sola vez y no cambia; es lo que el
+// cliente te dicta para que le generes su código.
+function installId() {
+  let id = DB.get('mv_install_id', null);
+  if (!id) {
+    const bytes = new Uint8Array(8);
+    (window.crypto || window.msCrypto).getRandomValues(bytes);
+    id = LicenseCore.newInstallId(bytes);
+    DB.set('mv_install_id', id);
+  }
+  return id;
 }
-function isValidLicense(code) {
-  const clean = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (clean.length !== 12) return false;
-  return licenseChecksum(clean.slice(0, 4), clean.slice(4, 8)) === clean.slice(8, 12);
+const installIdPretty = () => LicenseCore.formatId(installId());
+
+// Todo lo que la app necesita saber de la licencia, en un solo lugar.
+function licenseInfo() {
+  if (!LICENSE_ENFORCED) return { activated: true, enforced: false, plan: 'libre', expiresAt: 0, expired: false, daysLeft: Infinity };
+  const r = LicenseCore.checkCode(S.settings.licenseCode, installId());
+  return { activated: r.valid, enforced: true, plan: r.plan, expiresAt: r.expiresAt, expired: r.expired, daysLeft: r.daysLeft };
 }
-function isActivated() { return !LICENSE_ENFORCED || isValidLicense(S.settings.licenseCode); }
+function isActivated() { return licenseInfo().activated; }
 function salesUsed() { return S.orders.length; }
 function trialRemaining() { return Math.max(0, TRIAL_LIMIT - salesUsed()); }
 
@@ -526,14 +555,16 @@ function renderPOS() {
       <span class="emoji">${icon('search',42)}</span>No se encontraron productos.</div>`;
   } else {
     grid.innerHTML = list.map((p) => {
-      const line = S.cart.find((i) => i.productId === p.id);
-      const qty = line ? line.qty : 0;
+      // Puede haber varias líneas del mismo producto con opciones distintas:
+      // en la tarjeta se muestra el total sumado.
+      const qty = S.cart.filter((i) => i.productId === p.id).reduce((s, i) => s + i.qty, 0);
+      const conOpciones = hasOptions(p);
       return `<button class="product-card ${qty ? 'in-cart' : ''} ${p.image ? 'has-img' : ''}" data-add="${p.id}" style="--cat-color:${escapeHtml(catColor(p.category))}">
         ${qty ? `<span class="qty-badge">${qty}</span>` : ''}
         ${p.image ? `<div class="p-img" style="background-image:url('${escapeHtml(p.image)}')"></div>` : ''}
         <div class="p-name">${escapeHtml(p.name)}</div>
         <div class="p-price">${money(p.price)}</div>
-        <span class="p-plus">+</span>
+        <span class="p-plus">${conOpciones ? '…' : '+'}</span>
       </button>`;
     }).join('');
   }
@@ -566,9 +597,115 @@ function computeTotals() {
   return { subtotal, fee, discountAmount, total };
 }
 
+/* ---------- Personalizar un producto al agregarlo ----------
+   Solo aparece si el producto tiene grupos de opciones. Se guarda lo que se
+   va eligiendo en `customizing` y se vuelve a dibujar el cuerpo en cada toque,
+   para que el precio de abajo cambie al momento. */
+let customizing = null; // { productId, picked: { [groupId]: [choiceId, ...] } }
+
+function openCustomizeForm(productId) {
+  const p = S.products.find((x) => x.id === productId);
+  if (!p) return;
+  const picked = {};
+  productOptions(p).forEach((g) => {
+    // Si es de elegir uno y es obligatoria, se deja marcada la primera para
+    // que el cajero pueda agregar de un solo toque cuando sea la de siempre.
+    picked[g.id] = g.type === 'unica' && g.required && g.choices.length ? [g.choices[0].id] : [];
+  });
+  customizing = { productId, picked };
+  openModal(`
+    <div class="modal-head">
+      <h2>${escapeHtml(p.name)}</h2>
+      <button class="modal-close" data-close>${icon('close', 16)}</button>
+    </div>
+    <div class="modal-body" id="customizeBody"></div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close>Cancelar</button>
+      <button class="btn btn-primary btn-block" id="addCustomized">Agregar</button>
+    </div>
+  `);
+  renderCustomizeBody();
+}
+
+function renderCustomizeBody() {
+  if (!customizing) return;
+  const p = S.products.find((x) => x.id === customizing.productId);
+  const body = $('#customizeBody');
+  if (!p || !body) return;
+
+  body.innerHTML = productOptions(p).map((g) => {
+    const marcadas = customizing.picked[g.id] || [];
+    const ayuda = g.type === 'unica'
+      ? (g.required ? 'Elige una' : 'Elige una (opcional)')
+      : (g.required ? 'Elige una o más' : 'Opcional, puedes elegir varias');
+    return `
+      <div class="opt-group">
+        <div class="opt-group-head">
+          <strong>${escapeHtml(g.name)}</strong>
+          <span class="field-hint">${ayuda}</span>
+        </div>
+        <div class="opt-choices">
+          ${g.choices.map((c) => `
+            <button type="button" class="opt-choice ${marcadas.includes(c.id) ? 'on' : ''}"
+                    data-choice="${escapeHtml(c.id)}" data-group="${escapeHtml(g.id)}">
+              <span>${escapeHtml(c.name)}</span>
+              ${Number(c.price) > 0 ? `<span class="opt-price">+${money(c.price)}</span>` : ''}
+            </button>`).join('')}
+        </div>
+      </div>`;
+  }).join('');
+
+  const btn = $('#addCustomized');
+  if (btn) btn.textContent = `Agregar · ${money(p.price + chosenExtra(currentChoices()))}`;
+}
+
+// Traduce lo marcado a la lista que se guarda en el pedido.
+function currentChoices() {
+  if (!customizing) return [];
+  const p = S.products.find((x) => x.id === customizing.productId);
+  const out = [];
+  productOptions(p).forEach((g) => {
+    (customizing.picked[g.id] || []).forEach((cid) => {
+      const c = g.choices.find((x) => x.id === cid);
+      if (c) out.push({ group: g.name, name: c.name, price: Number(c.price) || 0 });
+    });
+  });
+  return out;
+}
+
+function toggleChoice(groupId, choiceId) {
+  if (!customizing) return;
+  const p = S.products.find((x) => x.id === customizing.productId);
+  const g = productOptions(p).find((x) => x.id === groupId);
+  if (!g) return;
+  const actuales = customizing.picked[groupId] || [];
+  if (g.type === 'unica') {
+    // Volver a tocar la misma la desmarca, salvo que el grupo sea obligatorio.
+    customizing.picked[groupId] = actuales.includes(choiceId) && !g.required ? [] : [choiceId];
+  } else {
+    customizing.picked[groupId] = actuales.includes(choiceId)
+      ? actuales.filter((x) => x !== choiceId)
+      : [...actuales, choiceId];
+  }
+  renderCustomizeBody();
+}
+
+function confirmCustomize() {
+  if (!customizing) return;
+  const p = S.products.find((x) => x.id === customizing.productId);
+  // No dejar agregar sin elegir lo obligatorio: es un error caro en la cocina.
+  const falta = productOptions(p).find((g) => g.required && !(customizing.picked[g.id] || []).length);
+  if (falta) { toast(`Falta elegir: ${falta.name}`); return; }
+  const opts = currentChoices();
+  const id = customizing.productId;
+  customizing = null;
+  closeModal();
+  addToCart(id, opts);
+}
+
 // Especificación por producto (ej. "sin cebolla") para un artículo del pedido actual.
-function openItemNoteForm(productId) {
-  const line = S.cart.find((i) => i.productId === productId);
+function openItemNoteForm(lineId) {
+  const line = S.cart.find((i) => i.lineId === lineId);
   if (!line) return;
   openModal(`
     <div class="modal-head">
@@ -587,32 +724,65 @@ function openItemNoteForm(productId) {
       <button class="btn btn-primary btn-block" id="saveItemNote">Guardar</button>
     </div>
   `);
-  modalEl.dataset.itemProductId = productId;
+  modalEl.dataset.itemLineId = lineId;
 }
 function saveItemNote() {
-  const pid = modalEl.dataset.itemProductId;
-  const line = S.cart.find((i) => i.productId === pid);
+  const lineId = modalEl.dataset.itemLineId;
+  const line = S.cart.find((i) => i.lineId === lineId);
   if (line) line.notes = ($('#itemNoteInput') ? $('#itemNoteInput').value : '').trim();
   closeModal();
   renderPOS();
 }
 
-function addToCart(productId) {
+/* ---------- Opciones y guarniciones ----------
+   Cada producto puede tener grupos de opciones. Hay dos tipos:
+     'unica'  -> se elige una sola (ej. Burrito: de carne o de pollo)
+     'varias' -> se pueden elegir varias (ej. guarniciones: arroz, frijoles)
+   Cada opción puede sumar precio (o costar 0, si solo es una variante).
+   Un producto sin opciones se comporta igual que siempre: se toca y se agrega. */
+const productOptions = (p) => (p && Array.isArray(p.options) ? p.options : []);
+const hasOptions = (p) => productOptions(p).length > 0;
+const chosenExtra = (opts) => (opts || []).reduce((s, o) => s + (Number(o.price) || 0), 0);
+
+// Dos líneas del pedido son "la misma" si son el mismo producto con las mismas
+// opciones. Así, dos burritos de pollo se juntan en una línea de 2, pero uno de
+// pollo y uno de carne quedan separados.
+const optionsKey = (opts) => (opts || []).map((o) => `${o.group}=${o.name}`).sort().join('|');
+const lineKey = (productId, opts) => `${productId}#${optionsKey(opts)}`;
+
+// Texto corto de las opciones, para el pedido, el ticket y WhatsApp.
+function optionsText(opts) {
+  return (opts || []).map((o) => (Number(o.price) > 0 ? `${o.name} (+${money(o.price)})` : o.name)).join(', ');
+}
+
+function addToCart(productId, chosen) {
   const p = S.products.find((x) => x.id === productId);
   if (!p) return;
-  const line = S.cart.find((i) => i.productId === productId);
+  const opts = chosen || [];
+  const key = lineKey(productId, opts);
+  const line = S.cart.find((i) => i.key === key);
   if (line) line.qty++;
   else {
     if (S.cart.length === 0) checkout.deliveryFee = checkout.type === 'domicilio' ? Number(S.settings.defaultDeliveryFee || 0) : 0;
-    S.cart.push({ productId, name: p.name, price: p.price, qty: 1, notes: '' });
+    S.cart.push({
+      lineId: uid(),
+      key,
+      productId,
+      name: p.name,
+      basePrice: p.price,
+      price: p.price + chosenExtra(opts), // precio unitario ya con las opciones
+      qty: 1,
+      notes: '',
+      options: opts,
+    });
   }
   renderPOS();
 }
-function changeQty(productId, delta) {
-  const line = S.cart.find((i) => i.productId === productId);
+function changeQty(lineId, delta) {
+  const line = S.cart.find((i) => i.lineId === lineId);
   if (!line) return;
   line.qty += delta;
-  if (line.qty <= 0) S.cart = S.cart.filter((i) => i.productId !== productId);
+  if (line.qty <= 0) S.cart = S.cart.filter((i) => i.lineId !== lineId);
   renderPOS();
 }
 
@@ -628,18 +798,19 @@ function renderOrderPanel() {
       ${prod && prod.image ? `<div class="ci-img" style="background-image:url('${escapeHtml(prod.image)}')"></div>` : ''}
       <div class="ci-info">
         <div class="ci-name">${escapeHtml(i.name)}</div>
+        ${i.options && i.options.length ? `<div class="ci-opts">${escapeHtml(optionsText(i.options))}</div>` : ''}
         <div class="ci-price">${money(i.price)} c/u</div>
         ${i.notes
-          ? `<button class="ci-note" data-itemnote="${i.productId}">${icon('edit', 12)} ${escapeHtml(i.notes)}</button>`
-          : `<button class="ci-note-add" data-itemnote="${i.productId}">+ especificación</button>`}
+          ? `<button class="ci-note" data-itemnote="${i.lineId}">${icon('edit', 12)} ${escapeHtml(i.notes)}</button>`
+          : `<button class="ci-note-add" data-itemnote="${i.lineId}">+ especificación</button>`}
       </div>
       <div class="qty-ctrl">
-        <button class="qty-btn" data-qty="${i.productId}" data-delta="-1">−</button>
+        <button class="qty-btn" data-qty="${i.lineId}" data-delta="-1">−</button>
         <span class="qty-num">${i.qty}</span>
-        <button class="qty-btn" data-qty="${i.productId}" data-delta="1">+</button>
+        <button class="qty-btn" data-qty="${i.lineId}" data-delta="1">+</button>
       </div>
       <div class="ci-total">${money(i.price * i.qty)}</div>
-      <button class="icon-btn ci-remove" data-removeitem="${i.productId}" title="Quitar del pedido">${icon('trash', 15)}</button>
+      <button class="icon-btn ci-remove" data-removeitem="${i.lineId}" title="Quitar del pedido">${icon('trash', 15)}</button>
     </div>`;
   }).join('');
 
@@ -873,7 +1044,10 @@ function pickCompanySuggestion(co) {
 }
 
 function confirmSale() {
-  if (!isActivated() && salesUsed() >= TRIAL_LIMIT) { closeModal(); openPaywall(); return; }
+  const lic = licenseInfo();
+  // Una licencia vencida corta de inmediato: las ventas de prueba ya se
+  // usaron en su momento y no vuelven a servir como periodo de gracia.
+  if (!lic.activated && (lic.expired || salesUsed() >= TRIAL_LIMIT)) { closeModal(); openPaywall(); return; }
 
   captureCheckoutInputs();
 
@@ -902,7 +1076,7 @@ function finalizeSale({ subtotal, deliveryFee, discountAmount, total, cashNum })
     id: uid(),
     folio: nextFolio(),
     date: Date.now(),
-    items: S.cart.map((i) => ({ name: i.name, price: i.price, qty: i.qty, notes: i.notes || '' })),
+    items: S.cart.map((i) => ({ name: i.name, price: i.price, qty: i.qty, notes: i.notes || '', options: i.options || [] })),
     type: checkout.type,
     customer: {
       name: checkout.cName || '',
@@ -944,24 +1118,49 @@ function finalizeSale({ subtotal, deliveryFee, discountAmount, total, cashNum })
 }
 
 /* ---------- Licencia: pantalla de activación / fin de prueba ---------- */
+// El mensaje de WhatsApp lleva el ID de instalación ya escrito: así el
+// cliente no tiene que copiarlo a mano y tú recibes lo que necesitas para
+// generarle el código.
+function sellerWhatsappLink(motivo) {
+  if (!SELLER_WHATSAPP) return '';
+  const texto = `Hola, quiero ${motivo} mi Punto de Venta.\nMi ID de instalación es: ${installIdPretty()}`;
+  return `https://wa.me/${SELLER_WHATSAPP}?text=${encodeURIComponent(texto)}`;
+}
+
+// Bloque con el ID de instalación y el botón para copiarlo. Se usa en la
+// pantalla de fin de prueba y en Ajustes.
+function installIdBoxHtml() {
+  return `
+    <div class="field" style="margin-top:12px">
+      <label>ID de esta instalación</label>
+      <div class="install-id">
+        <code id="installIdText">${installIdPretty()}</code>
+        <button type="button" class="icon-btn-label" id="copyInstallId">${icon('receipt')} Copiar</button>
+      </div>
+      <span class="field-hint">Dile este ID a quien te vendió la app. El código que te dé solo funciona en esta computadora.</span>
+    </div>`;
+}
+
 function openPaywall() {
-  const waLink = SELLER_WHATSAPP
-    ? `https://wa.me/${SELLER_WHATSAPP}?text=${encodeURIComponent('Hola, quiero activar mi Punto de Venta')}`
-    : '';
+  const info = licenseInfo();
+  const venció = info.expired;
+  const waLink = sellerWhatsappLink(venció ? 'renovar' : 'activar');
   openModal(`
     <div class="modal-head">
-      <h2>${icon('tag')} Activa tu Punto de Venta</h2>
+      <h2>${icon('tag')} ${venció ? 'Tu licencia venció' : 'Activa tu Punto de Venta'}</h2>
       <button class="modal-close" data-close>${icon('close', 16)}</button>
     </div>
     <div class="modal-body">
-      <p>Ya usaste tus ${TRIAL_LIMIT} ventas de prueba gratis. Para seguir vendiendo,
-      activa tu licencia con el código que te dieron al comprar.</p>
+      <p>${venció
+        ? 'Tu licencia llegó a su fecha de vencimiento. Renuévala para seguir vendiendo.'
+        : `Ya usaste tus ${TRIAL_LIMIT} ventas de prueba gratis. Para seguir vendiendo, activa tu licencia con el código que te dieron al comprar.`}</p>
       <div class="field">
         <label>Código de activación</label>
         <input id="licenseInput" placeholder="XXXX-XXXX-XXXX" autocomplete="off" style="text-transform:uppercase">
       </div>
       <button class="btn btn-primary btn-block" id="activateLicenseBtn">Activar</button>
-      ${waLink ? `<a class="btn btn-block" style="margin-top:10px;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px" href="${waLink}" target="_blank">${icon('chat')} Comprar por WhatsApp</a>` : ''}
+      ${waLink ? `<a class="btn btn-block" style="margin-top:10px;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px" href="${waLink}" target="_blank">${icon('chat')} ${venció ? 'Renovar' : 'Comprar'} por WhatsApp</a>` : ''}
+      ${installIdBoxHtml()}
       <p class="field-hint" style="text-align:center;margin-top:10px">Tus ventas y tu menú siguen guardados, solo se pausan las ventas nuevas hasta activar.</p>
     </div>
   `);
@@ -970,18 +1169,47 @@ function openPaywall() {
 function activateLicense() {
   const el = $('#licenseInput');
   const code = el ? el.value : '';
-  if (!isValidLicense(code)) { toast('Código inválido, revísalo e intenta de nuevo'); return; }
-  S.settings.licenseCode = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const r = LicenseCore.checkCode(code, installId());
+
+  // Se distingue "venció" de "está mal escrito": son problemas distintos y
+  // el cliente necesita saber cuál le tocó.
+  if (r.expired) { toast('Ese código ya venció. Pide uno nuevo para renovar.'); return; }
+  if (!r.valid) { toast('Código inválido. Revísalo, o confirma que te lo hayan hecho con tu ID.'); return; }
+
+  S.settings.licenseCode = LicenseCore.cleanId(code);
   saveSettings();
   closeModal();
-  toast('¡Activado! Ya puedes seguir vendiendo');
+  toast(r.plan === 'temporal'
+    ? `¡Activado! Tu licencia vence el ${new Date(r.expiresAt).toLocaleDateString('es-MX')}`
+    : '¡Activado! Ya puedes seguir vendiendo');
   if (S.view === 'ajustes') renderSettings();
+}
+
+function copyInstallId() {
+  const texto = installIdPretty();
+  const ok = () => toast('ID copiado');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(texto).then(ok, () => fallbackCopy(texto, ok));
+  } else fallbackCopy(texto, ok);
+}
+// Respaldo para cuando el portapapeles no está disponible (pasa si la app
+// se abre por http sin candado, que es justo el caso del servidor local).
+function fallbackCopy(texto, ok) {
+  const ta = document.createElement('textarea');
+  ta.value = texto;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); ok(); } catch (_) { toast('Copia el ID a mano: ' + texto); }
+  ta.remove();
 }
 
 /* ---------- Ticket ---------- */
 function ticketHtml(o) {
   const lines = o.items.map((i) => `
     <div class="t-row"><span>${i.qty}x ${escapeHtml(i.name)}</span><span>${money(i.price * i.qty)}</span></div>
+    ${(i.options || []).map((op) => `<div class="t-item-note">+ ${escapeHtml(op.name)}${Number(op.price) > 0 ? ` (${money(op.price)})` : ''}</div>`).join('')}
     ${i.notes ? `<div class="t-item-note">— ${escapeHtml(i.notes)}</div>` : ''}
   `).join('');
   const cust = o.type === 'domicilio' && (o.customer.name || o.customer.address) ? `
@@ -1148,6 +1376,7 @@ function whatsappTicket(o) {
   L.push('');
   o.items.forEach((i) => {
     L.push(`${i.qty}x ${i.name} — ${money(i.price * i.qty)}`);
+    (i.options || []).forEach((op) => L.push(`   + ${op.name}${Number(op.price) > 0 ? ` (${money(op.price)})` : ''}`));
     if (i.notes) L.push(`   (${i.notes})`);
   });
   L.push('');
@@ -1159,7 +1388,12 @@ function whatsappTicket(o) {
   if (o.type === 'domicilio' && o.customer.address) {
     L.push('');
     if (o.customer.name) L.push(`Cliente: ${o.customer.name}`);
+    if (o.customer.phone) L.push(`Tel: ${o.customer.phone}`);
     L.push(`Dirección: ${o.customer.address}`);
+  } else if (o.customer.name || o.customer.phone) {
+    L.push('');
+    if (o.customer.name) L.push(`Cliente: ${o.customer.name}`);
+    if (o.customer.phone) L.push(`Tel: ${o.customer.phone}`);
   }
   if (o.customer.notes) L.push(`Notas: ${o.customer.notes}`);
   const text = encodeURIComponent(L.join('\n'));
@@ -1240,11 +1474,12 @@ function renderPedidos() {
           <span>${money(o.total)} · ${o.payment === 'efectivo' ? icon('cash',13) + ' Efectivo' : icon('card',13) + ' Transf.'}</span>
           <span>${minsAgo(o.date)}</span>
         </div>
+        ${nextMeta ? `
         <div class="pc-actions">
+          <button class="btn btn-primary btn-block" data-advance="${o.id}" style="background:${nextMeta.color};border-color:${nextMeta.color}">Marcar: ${icon(nextMeta.icon,15)} ${nextMeta.label}</button>
+        </div>` : ''}
+        <div class="pc-actions-sec">
           ${prev ? `<button class="icon-btn" data-revert="${o.id}" title="Regresar a: ${STATUS[prev].label}">${icon('undo')}</button>` : ''}
-          ${nextMeta
-            ? `<button class="btn btn-primary btn-block" data-advance="${o.id}" style="background:${nextMeta.color};border-color:${nextMeta.color}">Marcar: ${icon(nextMeta.icon,15)} ${nextMeta.label}</button>`
-            : ''}
           <button class="icon-btn-label" data-order="${o.id}">${icon('receipt')}<span>Detalle</span></button>
           <button class="icon-btn-label" data-wapp="${o.id}">${icon('chat')}<span>Avisar</span></button>
         </div>
@@ -1558,12 +1793,148 @@ function renderMenu() {
           <div class="m-info">
             <div class="m-name ${p.active ? '' : 'off'}">${escapeHtml(p.name)}</div>
             <div class="m-price">${money(p.price)}</div>
+            ${hasOptions(p) ? `<div class="field-hint">${productOptions(p).map((g) => escapeHtml(g.name)).join(' · ')}</div>` : ''}
           </div>
+          <button class="icon-btn ${hasOptions(p) ? 'on' : ''}" data-options="${p.id}" title="Opciones y guarniciones">${icon('utensils')}</button>
           <button class="icon-btn" data-toggle="${p.id}" title="${p.active ? 'Ocultar del menú' : 'Mostrar en el menú'}">${icon(p.active ? 'eye' : 'eyeOff')}</button>
           <button class="icon-btn" data-edit="${p.id}" title="Editar">${icon('edit')}</button>
           <button class="icon-btn" data-delete="${p.id}" title="Borrar">${icon('trash')}</button>
         </div>`).join('')}
     </div>`).join('');
+}
+
+/* ---------- Editor de opciones y guarniciones ----------
+   Se trabaja sobre una copia (`editingOptions`) y solo se guarda al final, para
+   que salirse sin guardar no deje el producto a medias. Como el editor se
+   vuelve a dibujar al agregar o quitar renglones, antes de cada redibujado hay
+   que recoger lo que el usuario ya escribió: eso hace captureOptionsInputs. */
+let editingOptions = null; // { productId, groups: [...] }
+
+function openOptionsForm(productId) {
+  const p = S.products.find((x) => x.id === productId);
+  if (!p) return;
+  editingOptions = {
+    productId,
+    groups: JSON.parse(JSON.stringify(productOptions(p))),
+  };
+  openModal(`
+    <div class="modal-head">
+      <h2>${icon('utensils')} Opciones de ${escapeHtml(p.name)}</h2>
+      <button class="modal-close" data-close>${icon('close', 16)}</button>
+    </div>
+    <div class="modal-body" id="optionsBody"></div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close>Cancelar</button>
+      <button class="btn btn-primary btn-block" id="saveOptions">Guardar</button>
+    </div>
+  `);
+  renderOptionsEditor();
+}
+
+function captureOptionsInputs() {
+  if (!editingOptions) return;
+  editingOptions.groups.forEach((g, gi) => {
+    const n = $(`#optGName${gi}`); if (n) g.name = n.value;
+    const t = $(`#optGType${gi}`); if (t) g.type = t.value;
+    const r = $(`#optGReq${gi}`); if (r) g.required = r.checked;
+    g.choices.forEach((c, ci) => {
+      const cn = $(`#optCName${gi}_${ci}`); if (cn) c.name = cn.value;
+      const cp = $(`#optCPrice${gi}_${ci}`); if (cp) c.price = parseNum(cp.value);
+    });
+  });
+}
+
+function renderOptionsEditor() {
+  const body = $('#optionsBody');
+  if (!body || !editingOptions) return;
+  const gs = editingOptions.groups;
+
+  body.innerHTML = `
+    <p class="field-hint" style="margin-top:0">
+      Un grupo es una pregunta al vender. Por ejemplo <strong>"Guisado"</strong> de elegir uno
+      (carne o pollo), o <strong>"Guarniciones"</strong> de elegir varias (arroz, frijoles).
+      Deja el precio en 0 si la opción no cuesta extra.
+    </p>
+    ${gs.length === 0 ? `<div class="empty-state" style="padding:24px 8px">
+      <span class="emoji">${icon('utensils', 36)}</span>
+      Este producto no tiene opciones.<br>Se agrega al pedido con un solo toque.
+    </div>` : ''}
+    ${gs.map((g, gi) => `
+      <div class="opt-edit-group">
+        <div class="opt-edit-head">
+          <input id="optGName${gi}" value="${escapeHtml(g.name || '')}" placeholder="Nombre del grupo (ej. Guisado)">
+          <button class="icon-btn" data-opt="delgroup:${gi}" title="Quitar grupo">${icon('trash')}</button>
+        </div>
+        <div class="opt-edit-row">
+          <select id="optGType${gi}">
+            <option value="unica" ${g.type === 'varias' ? '' : 'selected'}>Elegir una</option>
+            <option value="varias" ${g.type === 'varias' ? 'selected' : ''}>Elegir varias</option>
+          </select>
+          <label class="opt-req">
+            <input type="checkbox" id="optGReq${gi}" ${g.required ? 'checked' : ''}> Obligatorio
+          </label>
+        </div>
+        ${g.choices.map((c, ci) => `
+          <div class="opt-edit-choice">
+            <input id="optCName${gi}_${ci}" value="${escapeHtml(c.name || '')}" placeholder="Opción (ej. Carne)">
+            <input id="optCPrice${gi}_${ci}" value="${Number(c.price) || 0}" inputmode="decimal" placeholder="0" title="Precio extra">
+            <button class="icon-btn" data-opt="delchoice:${gi}:${ci}" title="Quitar opción">${icon('close', 15)}</button>
+          </div>`).join('')}
+        <button class="btn btn-ghost" data-opt="addchoice:${gi}">+ Agregar opción</button>
+      </div>`).join('')}
+    <button class="btn btn-block" data-opt="addgroup" style="margin-top:12px">${icon('plus')} Agregar grupo</button>
+  `;
+}
+
+function optionsEditorAction(accion) {
+  if (!editingOptions) return;
+  captureOptionsInputs(); // no perder lo ya escrito al redibujar
+  const [que, gi, ci] = accion.split(':');
+  const gs = editingOptions.groups;
+  if (que === 'addgroup') {
+    gs.push({ id: uid(), name: '', type: 'unica', required: true, choices: [{ id: uid(), name: '', price: 0 }] });
+  } else if (que === 'delgroup') {
+    gs.splice(Number(gi), 1);
+  } else if (que === 'addchoice') {
+    gs[Number(gi)].choices.push({ id: uid(), name: '', price: 0 });
+  } else if (que === 'delchoice') {
+    gs[Number(gi)].choices.splice(Number(ci), 1);
+  }
+  renderOptionsEditor();
+}
+
+function saveOptions() {
+  if (!editingOptions) return;
+  captureOptionsInputs();
+
+  // Se tiran los renglones vacíos en vez de reclamarle al usuario: es común
+  // agregar uno de más y dejarlo en blanco.
+  const limpios = editingOptions.groups
+    .map((g) => ({
+      id: g.id || uid(),
+      name: String(g.name || '').trim(),
+      type: g.type === 'varias' ? 'varias' : 'unica',
+      required: !!g.required,
+      choices: g.choices
+        .filter((c) => String(c.name || '').trim())
+        .map((c) => ({ id: c.id || uid(), name: String(c.name).trim(), price: Number(c.price) || 0 })),
+    }))
+    .filter((g) => g.name && g.choices.length);
+
+  const sinNombre = editingOptions.groups.find((g) => !String(g.name || '').trim() && g.choices.some((c) => String(c.name || '').trim()));
+  if (sinNombre) { toast('Ponle nombre al grupo (ej. Guisado)'); return; }
+
+  const p = S.products.find((x) => x.id === editingOptions.productId);
+  if (!p) { closeModal(); return; }
+  const previas = p.options;
+  p.options = limpios;
+  if (!saveProducts()) { p.options = previas; return; }
+
+  editingOptions = null;
+  closeModal();
+  renderMenu();
+  renderPOS();
+  toast(limpios.length ? 'Opciones guardadas' : 'Producto sin opciones');
 }
 
 let productImage = ''; // imagen (dataURL) del producto que se está editando
@@ -1794,26 +2165,45 @@ function saveCompanyEdit() {
 
 function renderSettings() {
   const s = S.settings;
-  const activated = isActivated();
-  const waLink = SELLER_WHATSAPP
-    ? `https://wa.me/${SELLER_WHATSAPP}?text=${encodeURIComponent('Hola, quiero activar mi Punto de Venta')}`
-    : '';
+  const lic = licenseInfo();
+  const waLink = sellerWhatsappLink(lic.expired ? 'renovar' : 'activar');
+
+  // Aviso solo para ti: si el instalador se compiló sin la llave real,
+  // cualquiera puede fabricarse códigos. Mejor enterarse aquí que después.
+  const avisoLlave = LICENSE_ENFORCED && LicenseCore.saltIsPlaceholder() ? `
+    <div class="license-box warn" style="margin-bottom:12px">
+      <div class="license-status">${icon('alert')} Este build no tiene la llave de licencias</div>
+      <span class="field-hint">Normal si lo estás probando en tu computadora. Si ves esto en un instalador ya compilado, se construyó sin el secret LICENSE_SALT: los códigos serían falsificables y no debes distribuirlo.</span>
+    </div>` : '';
+
+  // Estado en palabras: qué plan tiene y hasta cuándo.
+  let estado;
+  if (!lic.activated && lic.expired) estado = `${icon('alert')} Licencia vencida`;
+  else if (!lic.activated) estado = `${icon('tag')} Prueba gratis: ${trialRemaining()} de ${TRIAL_LIMIT} ventas restantes`;
+  else if (lic.plan === 'temporal') {
+    const fecha = new Date(lic.expiresAt).toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' });
+    estado = `${icon('checkCircle')} Licencia activa hasta el ${fecha} (${lic.daysLeft} días)`;
+  } else estado = `${icon('checkCircle')} Licencia activada (pago único)`;
+
+  // A 7 días o menos del vencimiento se avisa, para que dé tiempo de renovar
+  // antes de que la app se pare en plena venta.
+  const porVencer = lic.activated && lic.plan === 'temporal' && lic.daysLeft <= 7;
+
   const licenseSection = !LICENSE_ENFORCED ? '' : `
-    <div class="license-box ${activated ? 'ok' : ''}">
-      <div class="license-status">
-        ${activated
-          ? `${icon('checkCircle')} Licencia activada`
-          : `${icon('tag')} Prueba gratis: ${trialRemaining()} de ${TRIAL_LIMIT} ventas restantes`}
-      </div>
-      ${activated ? '' : `
+    ${avisoLlave}
+    <div class="license-box ${lic.activated && !porVencer ? 'ok' : ''}">
+      <div class="license-status">${estado}</div>
+      ${porVencer ? `<span class="field-hint">Tu licencia está por vencer. Renuévala para no quedarte sin vender.</span>` : ''}
+      ${lic.activated && !porVencer ? '' : `
         <div class="field" style="margin-top:10px">
           <label>Código de activación</label>
           <input id="licenseInput" placeholder="XXXX-XXXX-XXXX" value="${escapeHtml(s.licenseCode || '')}" style="text-transform:uppercase">
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-primary" id="activateLicenseBtn">Activar</button>
-          ${waLink ? `<a class="btn" style="text-decoration:none;display:flex;align-items:center;gap:8px" href="${waLink}" target="_blank">${icon('chat')} Comprar por WhatsApp</a>` : ''}
+          <button class="btn btn-primary" id="activateLicenseBtn">${lic.expired || porVencer ? 'Renovar' : 'Activar'}</button>
+          ${waLink ? `<a class="btn" style="text-decoration:none;display:flex;align-items:center;gap:8px" href="${waLink}" target="_blank">${icon('chat')} ${lic.expired || porVencer ? 'Renovar' : 'Comprar'} por WhatsApp</a>` : ''}
         </div>`}
+      ${installIdBoxHtml()}
     </div>`;
   $('#settingsForm').innerHTML = `
     <div class="quick-section">
@@ -2497,7 +2887,7 @@ function switchView(view) {
    EVENTOS (delegación desde el documento)
    ============================================================ */
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-view],[data-add],[data-cat],[data-close],[data-qty],[data-removeitem],[data-itemnote],[data-order],[data-toggle],[data-edit],[data-delete],[data-type],[data-pay],[data-disctype],[data-clearcart],[data-closesheet],[data-color],[data-period],[data-advance],[data-revert],[data-wapp],[data-ob],[data-obcolor],[data-obsample],[data-editcustomer],[data-deletecustomer],[data-editcatcolor],[data-catcolor],[data-editcompany],[data-deletecompany],[data-pickcustomer],[data-pickcompany],[data-openentity],[data-fontscale],[data-ticketsize],[data-ticketweight]');
+  const t = e.target.closest('[data-view],[data-add],[data-cat],[data-close],[data-qty],[data-removeitem],[data-itemnote],[data-order],[data-toggle],[data-edit],[data-delete],[data-type],[data-pay],[data-disctype],[data-clearcart],[data-closesheet],[data-color],[data-period],[data-advance],[data-revert],[data-wapp],[data-ob],[data-obcolor],[data-obsample],[data-editcustomer],[data-deletecustomer],[data-editcatcolor],[data-catcolor],[data-editcompany],[data-deletecompany],[data-pickcustomer],[data-pickcompany],[data-openentity],[data-choice],[data-options],[data-opt],[data-fontscale],[data-ticketsize],[data-ticketweight]');
 
   // Navegación
   const nav = e.target.closest('.nav-btn');
@@ -2517,13 +2907,21 @@ document.addEventListener('click', (e) => {
   if (t.dataset.cat) { S.activeCat = t.dataset.cat; renderPOS(); return; }
 
   // POS: agregar producto
-  if (t.dataset.add) { addToCart(t.dataset.add); return; }
+  if (t.dataset.add) {
+    // Si el producto tiene opciones, primero se pregunta; si no, se agrega directo.
+    const prod = S.products.find((x) => x.id === t.dataset.add);
+    if (hasOptions(prod)) openCustomizeForm(t.dataset.add); else addToCart(t.dataset.add);
+    return;
+  }
+  if (t.dataset.choice) { toggleChoice(t.dataset.group, t.dataset.choice); return; }
+  if (t.dataset.options) { openOptionsForm(t.dataset.options); return; }
+  if (t.dataset.opt) { optionsEditorAction(t.dataset.opt); return; }
 
   // Pedido: cambiar cantidad
   if (t.dataset.qty) { changeQty(t.dataset.qty, Number(t.dataset.delta)); return; }
 
   // Pedido: quitar producto directamente / agregar-editar especificación
-  if (t.dataset.removeitem) { S.cart = S.cart.filter((i) => i.productId !== t.dataset.removeitem); renderPOS(); return; }
+  if (t.dataset.removeitem) { S.cart = S.cart.filter((i) => i.lineId !== t.dataset.removeitem); renderPOS(); return; }
   if (t.dataset.itemnote) { openItemNoteForm(t.dataset.itemnote); return; }
 
   // Pedido: tipo (domicilio / para llevar)
@@ -2696,7 +3094,10 @@ document.addEventListener('click', (e) => {
     case 'saveProduct': saveProduct(); break;
     case 'saveSettings': saveSettingsForm(); break;
     case 'saveItemNote': saveItemNote(); break;
+    case 'addCustomized': confirmCustomize(); break;
+    case 'saveOptions': saveOptions(); break;
     case 'activateLicenseBtn': activateLicense(); break;
+    case 'copyInstallId': copyInstallId(); break;
     case 'confirmDialogBtn': {
       const cb = pendingConfirmCallback;
       pendingConfirmCallback = null;

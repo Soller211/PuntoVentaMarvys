@@ -6,3 +6,11 @@ build/icon.png
 # Respaldos exportados y archivos del sistema
 respaldo-pos-*.json
 .DS_Store
+
+# Llave secreta de licencias: NUNCA se sube
+license-salt.txt
+
+# Manual de licencias: es para ti, no para el público
+# (el repo es publico y ahi se explica como funciona el candado).
+# Quita esta linea si prefieres tenerlo versionado.
+LICENCIAS.md

@@ -26,6 +26,15 @@ jobs:
       - name: Instalar dependencias
         run: npm install
 
+      # La llave de licencias no está en el repositorio (es público). Aquí se
+      # mete al código justo antes de compilar, desde el secret del repo:
+      # Settings -> Secrets and variables -> Actions -> LICENSE_SALT
+      # Es el mismo script que usa el despliegue web en Cloudflare.
+      - name: Inyectar la llave de licencias
+        env:
+          LICENSE_SALT: ${{ secrets.LICENSE_SALT }}
+        run: node inject-salt.js
+
       - name: Compilar el instalador
         run: npm run dist
 

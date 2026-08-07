@@ -369,8 +369,17 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 /* Ícono pequeño incrustado en un texto corrido */
 .i-ico { display: inline-flex; vertical-align: -3px; margin-right: 3px; }
 .i-ico svg { display: block; }
+/* Acciones del pedido en dos filas: arriba la principal (avanzar el estado),
+   abajo las secundarias. Antes iban las cuatro en una sola fila sin permiso
+   para saltar de línea y, en cuanto el botón verde crecía, "Avisar" se salía
+   del borde de la tarjeta y quedaba tapado por la tarjeta de al lado. */
 .pc-actions { display: flex; gap: 8px; align-items: center; margin-top: 2px; }
-.pc-actions .btn-block { flex: 1; }
+.pc-actions .btn-block { flex: 1; min-width: 0; }
+.pc-actions-sec {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px;
+}
+.pc-actions-sec .icon-btn-label { flex: 1 1 auto; justify-content: center; min-width: 0; }
+.pc-actions-sec .icon-btn-label span { overflow: hidden; text-overflow: ellipsis; }
 .status-pill {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 4px 10px; border-radius: 999px;
@@ -621,6 +630,20 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .license-box.ok { background: var(--success-soft); border-color: transparent; }
 .license-status { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: .92rem; }
 .license-box.ok .license-status { color: var(--success); }
+/* Aviso de instalador compilado sin la llave: tiene que saltar a la vista,
+   porque significa que ese .exe no se debe distribuir. */
+.license-box.warn { background: #fef3c7; border-color: var(--warning); }
+.license-box.warn .license-status { color: #92400e; }
+.license-box.warn .field-hint { color: #92400e; opacity: .85; }
+/* ID de instalación: se dicta por teléfono, así que va grande y separado. */
+.install-id { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.install-id code {
+  font-family: "Courier New", monospace;
+  font-size: 1.15rem; font-weight: 700; letter-spacing: .08em;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 12px;
+  user-select: all;
+}
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label { font-size: .82rem; font-weight: 600; color: var(--text-muted); }
 .field input, .field select, .field textarea {
@@ -747,6 +770,44 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 }
 .cart-item .ci-note-add { color: var(--primary); font-weight: 600; }
 .cart-item .ci-note { color: var(--text-muted); }
+.cart-item .ci-opts { font-size: .8rem; color: var(--primary-dark); font-weight: 600; line-height: 1.3; }
+
+/* ---------- Elegir opciones al agregar un producto ---------- */
+.opt-group { margin-bottom: 18px; }
+.opt-group-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.opt-group-head strong { font-size: 1rem; }
+.opt-choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.opt-choice {
+  flex: 1 1 44%;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 13px 14px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text);
+  font-weight: 600; font-size: .95rem; text-align: left;
+}
+.opt-choice.on { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-dark); }
+.opt-choice .opt-price { font-size: .82rem; opacity: .8; white-space: nowrap; }
+
+/* ---------- Editor de opciones (vista Menú) ---------- */
+.opt-edit-group {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 14px; margin-bottom: 12px; background: var(--surface-2);
+}
+.opt-edit-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.opt-edit-head input { flex: 1; min-width: 0; font-weight: 700; }
+.opt-edit-row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.opt-edit-row select { flex: 1 1 140px; min-width: 0; }
+.opt-req { display: flex; align-items: center; gap: 6px; font-size: .85rem; color: var(--text-muted); font-weight: 600; white-space: nowrap; }
+.opt-req input { width: 18px; height: 18px; }
+.opt-edit-choice { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.opt-edit-choice input:first-child { flex: 1 1 auto; min-width: 0; }
+.opt-edit-choice input:nth-child(2) { flex: 0 0 5.5rem; text-align: right; }
+.opt-edit-group input, .opt-edit-group select {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px; background: var(--surface); color: var(--text);
+}
+/* Marca el botón de opciones cuando el producto ya tiene alguna configurada */
+.icon-btn.on { background: var(--primary-soft); color: var(--primary); }
 .cart-item .ci-remove { width: 32px; height: 32px; flex: 0 0 32px; color: var(--text-muted); }
 .qty-ctrl { display: flex; align-items: center; gap: 4px; }
 .qty-btn { width: var(--qty-btn); height: var(--qty-btn); border-radius: 8px; border: 1px solid var(--border); background: var(--surface); font-size: 1.2rem; font-weight: 700; display: grid; place-items: center; flex: none; }

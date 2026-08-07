@@ -16,3 +16,12 @@ server.js
 README.md
 .gitignore
 .assetsignore
+
+# Cosas de licencias que NO deben quedar publicadas en el sitio.
+# license-salt.txt es tu llave secreta: si se sube, cualquiera puede
+# descargarla desde el navegador y fabricarse códigos.
+# OJO: license-core.js SÍ tiene que subir, la app web lo necesita.
+license-salt.txt
+generate-license.js
+inject-salt.js
+LICENCIAS.md
